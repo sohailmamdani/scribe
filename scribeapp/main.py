@@ -4,7 +4,8 @@ Scribe - Real-time speech-to-text Mac application
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QTextEdit, QLabel, QStatusBar, QProgressBar, QCheckBox
+    QPushButton, QTextEdit, QLabel, QStatusBar, QProgressBar, QCheckBox,
+    QMessageBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
 from PyQt5.QtGui import QFont
@@ -464,6 +465,10 @@ class Scribe(QMainWindow):
         status = "enabled" if self.auto_paste_enabled else "disabled"
         self.status_bar.showMessage(f"Auto-paste {status}", 2000)
 
+        # Note: We don't check permissions here because the check might fail to import
+        # even when permissions are granted. We'll handle permission issues when
+        # actually attempting to paste.
+
     def _perform_auto_paste(self, text: str):
         """
         Perform auto-paste of transcribed text.
@@ -471,9 +476,26 @@ class Scribe(QMainWindow):
         Args:
             text: Text to paste
         """
+        # Use QTimer to avoid blocking the main thread
+        # Convert delay from seconds to milliseconds
+        delay_ms = int(config.AUTO_PASTE_DELAY * 1000)
+
+        # Schedule the paste operation
+        QTimer.singleShot(delay_ms, lambda: self._execute_paste(text))
+
+    def _execute_paste(self, text: str):
+        """
+        Execute the actual paste operation.
+
+        Args:
+            text: Text to paste
+        """
         try:
-            # Small delay to ensure transcription is complete
-            time.sleep(config.AUTO_PASTE_DELAY)
+            # Check if the Scribe window has focus - if it does, don't paste
+            # The user likely wants to paste into a different application
+            if self.isActiveWindow():
+                self.status_bar.showMessage("⚠ Please click in the target text area first", 2000)
+                return
 
             # Paste the text
             success = self.auto_paste.paste_text(
@@ -485,11 +507,43 @@ class Scribe(QMainWindow):
                 # Visual feedback (brief status message)
                 self.status_bar.showMessage("✓ Pasted", 1000)
             else:
-                self.status_bar.showMessage("⚠ Paste failed", 2000)
+                # Paste failed - could be permissions or other issue
+                self.status_bar.showMessage("⚠ Paste failed - check accessibility permissions", 3000)
+                # Copy to clipboard so user can manually paste
+                try:
+                    import pyperclip
+                    pyperclip.copy(text)
+                except:
+                    pass
 
         except Exception as e:
             print(f"Auto-paste error: {e}")
             self.status_bar.showMessage("⚠ Paste error", 2000)
+
+    def _show_permissions_dialog(self):
+        """Show dialog explaining how to grant accessibility permissions."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Accessibility Permissions Required")
+        msg.setText("Auto-paste requires Accessibility permissions to work.")
+        msg.setInformativeText(
+            "To enable auto-paste:\n\n"
+            "1. Click the Apple menu  → System Settings\n"
+            "2. Click Privacy & Security in the sidebar\n"
+            "3. Click Accessibility\n"
+            "4. Click the lock icon 🔒 and authenticate\n"
+            "5. Find 'Python' or 'Terminal' in the list\n"
+            "   (If not listed, click + to add it)\n"
+            "6. Toggle the switch to ON\n"
+            "7. Click 'Later' when prompted to quit\n"
+            "8. Restart Scribe\n\n"
+            "macOS Sequoia note: You may need to re-grant \n"
+            "permissions monthly or after reboots.\n\n"
+            "The text has been copied to your clipboard - \n"
+            "you can paste manually with Cmd+V."
+        )
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec_()
 
     def clear_transcription(self):
         """Clear the transcription display."""

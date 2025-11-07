@@ -126,8 +126,9 @@ AUTO_PASTE_ENABLED = True
 RESTORE_CLIPBOARD_AFTER_PASTE = True
 
 # Delay before auto-paste (seconds)
-# Small delay to ensure transcription is complete before pasting
-AUTO_PASTE_DELAY = 0.1
+# Small delay to give you time to click into the target text area before pasting
+# Recommended: 0.5-1.0 seconds gives enough time to switch focus to target app
+AUTO_PASTE_DELAY = 0.5
 
 # ============================================================================
 # GLOBAL HOTKEY SETTINGS
