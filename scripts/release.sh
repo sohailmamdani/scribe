@@ -83,8 +83,19 @@ echo "▶ Re-signing Sparkle helpers with Developer ID..."
 SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
 
 # Extract main app entitlements first so we can re-apply when we re-sign the .app.
+# Strip com.apple.security.get-task-allow defensively — notarization rejects it.
 ENTITLEMENTS_TMP=$(mktemp -t scribe-entitlements.XXXXXX.plist)
 codesign -d --entitlements "$ENTITLEMENTS_TMP" --xml "$APP_PATH" 2>/dev/null
+python3 -c "
+import plistlib, sys
+with open('$ENTITLEMENTS_TMP', 'rb') as f:
+    e = plistlib.load(f)
+removed = e.pop('com.apple.security.get-task-allow', None)
+with open('$ENTITLEMENTS_TMP', 'wb') as f:
+    plistlib.dump(e, f)
+if removed is not None:
+    print('  ✓ stripped get-task-allow from re-sign entitlements', file=sys.stderr)
+"
 
 for helper in \
     "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" \
