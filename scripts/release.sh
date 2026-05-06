@@ -1,15 +1,18 @@
 #!/bin/bash
-# Cuts a new release: builds, signs, updates the appcast, tags, and publishes
-# a GitHub release with the DMG attached.
+# Cuts a new release: builds with Developer ID, notarizes, staples,
+# signs the DMG, updates the Sparkle appcast, tags, and publishes a
+# GitHub release with the DMG attached.
 #
 # Usage: ./scripts/release.sh <version>
 # Example: ./scripts/release.sh 1.6
 #
 # Pre-requisites:
-#   - MARKETING_VERSION + CURRENT_PROJECT_VERSION already bumped in
-#     Scribe.xcodeproj/project.pbxproj
-#   - Sparkle CLI tools fetched: ./scripts/install-tools.sh
-#   - Sparkle private key in macOS Keychain (created via generate_keys)
+#   - MARKETING_VERSION + CURRENT_PROJECT_VERSION bumped in project.pbxproj
+#   - Sparkle CLI tools: ./scripts/install-tools.sh
+#   - Sparkle private key in Keychain (one-time `tools/bin/generate_keys`)
+#   - Developer ID Application cert in Keychain
+#   - notarytool keychain profile "scribe-notary" (one-time
+#     `xcrun notarytool store-credentials scribe-notary ...`)
 #   - gh CLI authenticated
 
 set -euo pipefail
@@ -21,35 +24,90 @@ APP_PATH="build/release/Build/Products/Release/Scribe.app"
 APPCAST="docs/appcast.xml"
 RELEASE_NOTES_URL="https://github.com/sohailmamdani/scribe/releases/tag/$TAG"
 
-# 0. Sanity checks
-[[ -x "tools/bin/sign_update" ]] || { echo "Sparkle tools missing — run scripts/install-tools.sh"; exit 1; }
-[[ -z "$(git status --porcelain)" ]] || { echo "Working tree dirty — commit or stash first"; exit 1; }
+CODESIGN_IDENTITY="Developer ID Application: Sohail Mamdani (N3WXD74E2V)"
+NOTARY_PROFILE="scribe-notary"
 
-echo "▶ Building Scribe.app (Release)..."
-xcodebuild -project Scribe.xcodeproj -scheme Scribe -configuration Release \
-    -destination 'platform=macOS' \
-    -derivedDataPath build/release \
-    clean build > /tmp/scribe-build.log 2>&1 || { tail -50 /tmp/scribe-build.log; exit 1; }
+# ----- Pre-flight checks (fail loud, fail early) -----
+[[ -x "tools/bin/sign_update" ]] || { echo "✗ Sparkle tools missing — run scripts/install-tools.sh"; exit 1; }
+[[ -z "$(git status --porcelain)" ]] || { echo "✗ Working tree dirty — commit or stash first"; exit 1; }
 
-BUILT_VERSION=$(defaults read "$PWD/$APP_PATH/Contents/Info" CFBundleShortVersionString)
-BUILT_BUILD=$(defaults read "$PWD/$APP_PATH/Contents/Info" CFBundleVersion)
-if [[ "$BUILT_VERSION" != "$VERSION" ]]; then
-    echo "ERROR: built CFBundleShortVersionString=$BUILT_VERSION, expected $VERSION."
-    echo "Bump MARKETING_VERSION in project.pbxproj before releasing."
+if ! security find-identity -v -p codesigning | grep -q "Developer ID Application: Sohail Mamdani"; then
+    echo "✗ Developer ID Application cert not found in keychain"; exit 1
+fi
+
+if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    cat <<EOF
+✗ notarytool keychain profile "$NOTARY_PROFILE" not set up.
+
+One-time setup:
+    xcrun notarytool store-credentials "$NOTARY_PROFILE" \\
+        --apple-id <your-apple-id-email> \\
+        --team-id N3WXD74E2V \\
+        --password <app-specific-password>
+
+Generate the app-specific password at https://account.apple.com → Sign-In and Security.
+EOF
     exit 1
 fi
 
+# ----- Build with Developer ID -----
+echo "▶ Building Scribe.app (Release, Developer ID)..."
+xcodebuild -project Scribe.xcodeproj -scheme Scribe -configuration Release \
+    -destination 'platform=macOS' \
+    -derivedDataPath build/release \
+    CODE_SIGN_IDENTITY="$CODESIGN_IDENTITY" \
+    CODE_SIGN_STYLE=Manual \
+    OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
+    clean build > /tmp/scribe-build.log 2>&1 || { tail -60 /tmp/scribe-build.log; exit 1; }
+
+# Verify version
+BUILT_VERSION=$(defaults read "$PWD/$APP_PATH/Contents/Info" CFBundleShortVersionString)
+BUILT_BUILD=$(defaults read "$PWD/$APP_PATH/Contents/Info" CFBundleVersion)
+if [[ "$BUILT_VERSION" != "$VERSION" ]]; then
+    echo "✗ Built CFBundleShortVersionString=$BUILT_VERSION, expected $VERSION. Bump MARKETING_VERSION first."
+    exit 1
+fi
+
+# Verify the cert that actually got used
+if ! codesign -dvv "$APP_PATH" 2>&1 | grep -q "Authority=Developer ID Application"; then
+    echo "✗ App was not signed with Developer ID Application. Check Xcode signing settings."
+    codesign -dvv "$APP_PATH" 2>&1 | grep Authority
+    exit 1
+fi
+
+# ----- Notarize the .app -----
+echo "▶ Submitting to Apple notary service (this can take 5–15 minutes)..."
+ZIP=/tmp/scribe-notarize-$VERSION.zip
+ditto -c -k --keepParent "$APP_PATH" "$ZIP"
+xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+rm "$ZIP"
+
+# ----- Staple the .app -----
+echo "▶ Stapling notarization ticket..."
+xcrun stapler staple "$APP_PATH"
+xcrun stapler validate "$APP_PATH" || { echo "✗ Staple validation failed"; exit 1; }
+spctl -a -vv -t exec "$APP_PATH" 2>&1 | grep -q "accepted" || { echo "✗ spctl rejected the .app"; exit 1; }
+
+# ----- Build DMG (with stapled .app) -----
 echo "▶ Building DMG..."
 sed -i.bak "s|^DMG_NAME=.*|DMG_NAME=\"$DMG\"|" create-dmg.sh && rm create-dmg.sh.bak
 rm -f "$DMG"
 ./create-dmg.sh "$APP_PATH" > /dev/null
+
+# ----- Sign the DMG itself with Developer ID -----
+echo "▶ Signing DMG..."
+codesign --sign "$CODESIGN_IDENTITY" --timestamp "$DMG"
+codesign --verify --verbose=2 "$DMG" 2>&1 | grep -q "valid on disk" || { echo "✗ DMG signature invalid"; exit 1; }
+
 DMG_SIZE=$(stat -f%z "$DMG")
 
-echo "▶ Signing update..."
+# ----- Sparkle sign_update on the final, stapled DMG -----
+echo "▶ Signing update for Sparkle..."
 SIGN_OUTPUT=$(./tools/bin/sign_update "$DMG")
 ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -E 's/.*sparkle:edSignature="([^"]+)".*/\1/')
-[[ -n "$ED_SIGNATURE" ]] || { echo "Could not parse signature from: $SIGN_OUTPUT"; exit 1; }
+[[ -n "$ED_SIGNATURE" ]] || { echo "✗ Could not parse Sparkle signature from: $SIGN_OUTPUT"; exit 1; }
 
+# ----- Update appcast -----
 PUBDATE=$(date -u "+%a, %d %b %Y %H:%M:%S +0000")
 ENCLOSURE_URL="https://github.com/sohailmamdani/scribe/releases/download/$TAG/$DMG"
 
@@ -66,15 +124,20 @@ ITEM=$(cat <<EOF
         </item>
 EOF
 )
-# Insert new <item> right after <language>en</language>
 python3 -c "
-import sys, re
+import re
 content = open('$APPCAST').read()
 new_item = '''$ITEM'''
-content = re.sub(r'(<language>en</language>)', r'\1\n' + new_item, content, count=1)
+# If an entry for this version already exists, replace it; otherwise insert after <language>.
+existing_pattern = r'        <item>\s*<title>Version $VERSION</title>.*?</item>\n?'
+if re.search(existing_pattern, content, flags=re.DOTALL):
+    content = re.sub(existing_pattern, new_item + '\n', content, flags=re.DOTALL)
+else:
+    content = re.sub(r'(<language>en</language>)', r'\1\n' + new_item, content, count=1)
 open('$APPCAST', 'w').write(content)
 "
 
+# ----- Tag, push, release -----
 echo "▶ Committing appcast and tagging..."
 git add "$APPCAST" create-dmg.sh
 git commit -m "Release $TAG"
@@ -85,13 +148,14 @@ echo "▶ Creating GitHub release..."
 gh release create "$TAG" \
     --title "Scribe $VERSION" \
     --notes-file <(cat <<EOF
-Auto-update: existing $TAG users will be offered this build via the in-app updater (or **Scribe → Check for Updates…**).
+Notarized & stapled. Auto-update: existing users on $TAG or later will be offered this build via the in-app updater (or **Scribe → Check for Updates…**).
 
 Download \`$DMG\` below if installing manually.
 EOF
 ) \
     "$DMG"
 
+echo
 echo "✓ Released $TAG"
 echo "  Appcast: https://sohailmamdani.github.io/scribe/appcast.xml"
 echo "  Release: $RELEASE_NOTES_URL"
