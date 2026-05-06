@@ -33,6 +33,9 @@ build/
 logs/
 .cookie-storage/
 
+# Sparkle CLI tools (fetched via scripts/install-tools.sh)
+tools/
+
 # IDE
 .vscode/
 .idea/

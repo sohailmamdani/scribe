@@ -20,6 +20,7 @@ Scribe is built around a simple promise: your voice stays on your device.
 - **No network calls during transcription.** WhisperKit downloads the model from Hugging Face on first launch (~3 GB); after that, transcription is fully offline.
 - **No account, no sign-up.** The app does not have a server.
 - **No background recording.** The microphone is only active while you're holding (or have toggled on) recording.
+- **Auto-update is the only outbound network call.** Once a day, the app fetches a small XML file (`appcast.xml`) from GitHub Pages to check for new versions. No identifying information is sent — Sparkle's optional system-profiling feature is explicitly disabled. You can turn off automatic checks entirely in the update prompt.
 
 If privacy is the reason you're here, Scribe is the right shape for you.
 
@@ -43,7 +44,11 @@ cd scribe
 open Scribe.xcodeproj
 ```
 
-Then ⌘R in Xcode. Swift Package Manager will resolve `argmax-oss-swift` on first open.
+Then ⌘R in Xcode. Swift Package Manager will resolve `argmax-oss-swift` and `Sparkle` on first open.
+
+## Releasing (maintainer only)
+
+Releases are published via `scripts/release.sh <version>` which builds the app, creates a signed DMG, updates the Sparkle appcast, tags, and publishes a GitHub release. Requires the Sparkle private key in your macOS Keychain (one-time `tools/bin/generate_keys`).
 
 ## License
 

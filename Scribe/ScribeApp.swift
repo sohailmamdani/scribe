@@ -5,6 +5,7 @@ import Combine
 struct ScribeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var appState = AppState()
+    @ObservedObject private var updater = UpdaterController.shared
 
     var body: some Scene {
         WindowGroup {
@@ -15,6 +16,12 @@ struct ScribeApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
+            }
         }
 
         Settings {

@@ -23,6 +23,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Show Window", action: #selector(showWindow), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ","))
+        let updateItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(UpdaterController.checkForUpdates),
+            keyEquivalent: ""
+        )
+        updateItem.target = UpdaterController.shared
+        menu.addItem(updateItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit Scribe", action: #selector(quitApp), keyEquivalent: "q"))
 
