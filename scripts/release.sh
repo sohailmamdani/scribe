@@ -157,6 +157,24 @@ codesign --sign "$CODESIGN_IDENTITY" --timestamp "$DMG"
 DMG_VERIFY=$(codesign --verify --verbose=2 "$DMG" 2>&1 || true)
 grep -q "valid on disk" <<<"$DMG_VERIFY" || { echo "✗ DMG signature invalid: $DMG_VERIFY"; exit 1; }
 
+# ----- Notarize the DMG itself so Gatekeeper accepts it offline -----
+echo "▶ Submitting DMG to notary service..."
+DMG_NOTARIZE_JSON=$(xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)
+DMG_NOTARIZE_STATUS=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['status'])" "$DMG_NOTARIZE_JSON")
+DMG_NOTARIZE_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['id'])" "$DMG_NOTARIZE_JSON")
+if [[ "$DMG_NOTARIZE_STATUS" != "Accepted" ]]; then
+    echo "✗ DMG notarization $DMG_NOTARIZE_STATUS for $DMG_NOTARIZE_ID. Log:"
+    xcrun notarytool log "$DMG_NOTARIZE_ID" --keychain-profile "$NOTARY_PROFILE"
+    exit 1
+fi
+echo "  ✓ DMG notarization Accepted"
+
+echo "▶ Stapling DMG..."
+xcrun stapler staple "$DMG"
+xcrun stapler validate "$DMG" || { echo "✗ DMG staple validation failed"; exit 1; }
+DMG_SPCTL=$(spctl -a -vv -t install "$DMG" 2>&1 || true)
+grep -q "accepted" <<<"$DMG_SPCTL" || { echo "✗ spctl rejected DMG: $DMG_SPCTL"; exit 1; }
+
 DMG_SIZE=$(stat -f%z "$DMG")
 
 # ----- Sparkle sign_update on the final, stapled DMG -----
