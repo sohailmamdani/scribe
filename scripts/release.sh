@@ -68,7 +68,7 @@ if [[ "$BUILT_VERSION" != "$VERSION" ]]; then
     exit 1
 fi
 
-# Verify the cert that actually got used
+# Verify the cert that actually got used on the main binary
 APP_CODESIGN=$(codesign -dvv "$APP_PATH" 2>&1)
 if ! grep -q "Authority=Developer ID Application" <<<"$APP_CODESIGN"; then
     echo "✗ App was not signed with Developer ID Application. Check Xcode signing settings."
@@ -76,12 +76,51 @@ if ! grep -q "Authority=Developer ID Application" <<<"$APP_CODESIGN"; then
     exit 1
 fi
 
+# ----- Re-sign Sparkle's bundled helpers with our Developer ID -----
+# Sparkle ships pre-signed XPC services + helpers. Notarization rejects them
+# because they're signed by the Sparkle team's cert, not ours. Sign inside-out.
+echo "▶ Re-signing Sparkle helpers with Developer ID..."
+SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+
+# Extract main app entitlements first so we can re-apply when we re-sign the .app.
+ENTITLEMENTS_TMP=$(mktemp -t scribe-entitlements.XXXXXX.plist)
+codesign -d --entitlements "$ENTITLEMENTS_TMP" --xml "$APP_PATH" 2>/dev/null
+
+for helper in \
+    "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" \
+    "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc" \
+    "$SPARKLE_FW/Versions/B/Updater.app" \
+    "$SPARKLE_FW/Versions/B/Autoupdate" \
+    "$SPARKLE_FW"; do
+    codesign --force --sign "$CODESIGN_IDENTITY" --timestamp --options runtime "$helper"
+done
+
+# Re-sign the main app last (inner re-signs invalidate the outer signature).
+codesign --force --sign "$CODESIGN_IDENTITY" --timestamp --options runtime \
+    --entitlements "$ENTITLEMENTS_TMP" \
+    "$APP_PATH"
+rm -f "$ENTITLEMENTS_TMP"
+
+# Sanity: app must still be Developer ID-signed and Gatekeeper-acceptable
+codesign --verify --verbose=2 --deep --strict "$APP_PATH" 2>&1 | grep -q "satisfies its Designated Requirement" \
+    && echo "  ✓ deep verify passed" \
+    || { echo "✗ deep codesign verify failed"; codesign --verify --verbose=4 --deep --strict "$APP_PATH"; exit 1; }
+
 # ----- Notarize the .app -----
 echo "▶ Submitting to Apple notary service (this can take 5–15 minutes)..."
 ZIP=/tmp/scribe-notarize-$VERSION.zip
+rm -f "$ZIP"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP"
-xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+NOTARIZE_JSON=$(xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)
 rm "$ZIP"
+NOTARIZE_STATUS=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['status'])" "$NOTARIZE_JSON")
+NOTARIZE_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['id'])" "$NOTARIZE_JSON")
+if [[ "$NOTARIZE_STATUS" != "Accepted" ]]; then
+    echo "✗ Notarization $NOTARIZE_STATUS for submission $NOTARIZE_ID. Log:"
+    xcrun notarytool log "$NOTARIZE_ID" --keychain-profile "$NOTARY_PROFILE"
+    exit 1
+fi
+echo "  ✓ Notarization Accepted (id=$NOTARIZE_ID)"
 
 # ----- Staple the .app -----
 echo "▶ Stapling notarization ticket..."
