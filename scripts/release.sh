@@ -85,8 +85,9 @@ SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
 # Extract main app entitlements first so we can re-apply when we re-sign the .app.
 # Strip com.apple.security.get-task-allow defensively — notarization rejects it.
 ENTITLEMENTS_TMP=$(mktemp -t scribe-entitlements.XXXXXX.plist)
-codesign -d --entitlements "$ENTITLEMENTS_TMP" --xml "$APP_PATH" 2>/dev/null
-python3 -c "
+codesign -d --entitlements "$ENTITLEMENTS_TMP" --xml "$APP_PATH" 2>/dev/null || true
+if [[ -s "$ENTITLEMENTS_TMP" ]]; then
+    python3 -c "
 import plistlib, sys
 with open('$ENTITLEMENTS_TMP', 'rb') as f:
     e = plistlib.load(f)
@@ -96,6 +97,10 @@ with open('$ENTITLEMENTS_TMP', 'wb') as f:
 if removed is not None:
     print('  ✓ stripped get-task-allow from re-sign entitlements', file=sys.stderr)
 "
+else
+    echo "✗ Built .app has no entitlements — sandbox/audio-input/network.client are required"
+    exit 1
+fi
 
 for helper in \
     "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" \
