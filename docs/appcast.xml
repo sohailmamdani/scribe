@@ -5,5 +5,14 @@
         <link>https://sohailmamdani.github.io/scribe/appcast.xml</link>
         <description>Updates for Scribe — privacy-respecting macOS speech-to-text.</description>
         <language>en</language>
+        <item>
+            <title>Version 1.6</title>
+            <pubDate>Wed, 06 May 2026 03:16:38 +0000</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>1.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/sohailmamdani/scribe/releases/tag/v1.6</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/sohailmamdani/scribe/releases/download/v1.6/Scribe-1.6.dmg" length="4061534" type="application/octet-stream" sparkle:edSignature="Avf0Tt0jSVE5yt0r1jPzIlgSIZSqI43xBKS9eW3pgbLMosHELZHdfhmcklaEtGHnK5hzaXrVtOhR2KoAvyo4BA=="/>
+        </item>
     </channel>
 </rss>

@@ -3,7 +3,7 @@
 # Script to create a distributable DMG for Scribe
 
 APP_PATH="$1"
-DMG_NAME="Scribe-1.5.dmg"
+DMG_NAME="Scribe-1.6.dmg"
 VOLUME_NAME="Scribe"
 
 if [ -z "$APP_PATH" ]; then
