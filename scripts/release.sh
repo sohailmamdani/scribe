@@ -69,9 +69,10 @@ if [[ "$BUILT_VERSION" != "$VERSION" ]]; then
 fi
 
 # Verify the cert that actually got used
-if ! codesign -dvv "$APP_PATH" 2>&1 | grep -q "Authority=Developer ID Application"; then
+APP_CODESIGN=$(codesign -dvv "$APP_PATH" 2>&1)
+if ! grep -q "Authority=Developer ID Application" <<<"$APP_CODESIGN"; then
     echo "✗ App was not signed with Developer ID Application. Check Xcode signing settings."
-    codesign -dvv "$APP_PATH" 2>&1 | grep Authority
+    grep Authority <<<"$APP_CODESIGN"
     exit 1
 fi
 
@@ -86,7 +87,8 @@ rm "$ZIP"
 echo "▶ Stapling notarization ticket..."
 xcrun stapler staple "$APP_PATH"
 xcrun stapler validate "$APP_PATH" || { echo "✗ Staple validation failed"; exit 1; }
-spctl -a -vv -t exec "$APP_PATH" 2>&1 | grep -q "accepted" || { echo "✗ spctl rejected the .app"; exit 1; }
+SPCTL_OUT=$(spctl -a -vv -t exec "$APP_PATH" 2>&1 || true)
+grep -q "accepted" <<<"$SPCTL_OUT" || { echo "✗ spctl rejected the .app: $SPCTL_OUT"; exit 1; }
 
 # ----- Build DMG (with stapled .app) -----
 echo "▶ Building DMG..."
@@ -97,7 +99,8 @@ rm -f "$DMG"
 # ----- Sign the DMG itself with Developer ID -----
 echo "▶ Signing DMG..."
 codesign --sign "$CODESIGN_IDENTITY" --timestamp "$DMG"
-codesign --verify --verbose=2 "$DMG" 2>&1 | grep -q "valid on disk" || { echo "✗ DMG signature invalid"; exit 1; }
+DMG_VERIFY=$(codesign --verify --verbose=2 "$DMG" 2>&1 || true)
+grep -q "valid on disk" <<<"$DMG_VERIFY" || { echo "✗ DMG signature invalid: $DMG_VERIFY"; exit 1; }
 
 DMG_SIZE=$(stat -f%z "$DMG")
 
