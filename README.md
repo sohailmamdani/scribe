@@ -1,6 +1,6 @@
 # Scribe
 
-A native macOS speech-to-text app that runs entirely on your machine.
+A native macOS and iOS speech-to-text app that runs entirely on your machine.
 
 Press a global hotkey, speak, release — your words are transcribed locally and pasted into whatever app is in front of you. No cloud, no account, no upload.
 
@@ -30,6 +30,24 @@ If privacy is the reason you're here, Scribe is the right shape for you.
 - Microphone access (the app will prompt on first run).
 - Accessibility permission, only if you want auto-paste into other apps.
 
+For the iOS app and keyboard:
+
+- iOS or iPadOS 18 or later.
+- Microphone access in the containing Scribe app.
+- Scribe Keyboard enabled with Full Access. Full Access is used for private App Group communication between the keyboard and Scribe; transcription remains on-device.
+
+## iPhone and iPad
+
+The `Scribe iOS` target includes a containing app and an embedded `ScribeKeyboard` extension. From any standard text field, switch to Scribe Keyboard and tap **Dictate**. The keyboard asks iOS to open Scribe, the containing app activates the microphone, and recording continues while you return to the original app. Scribe transcribes and polishes the recording locally and inserts the result at the cursor. On recent iOS versions, you may need to swipe back once after Scribe opens.
+
+To enable the keyboard:
+
+1. Install and open Scribe once so its on-device model can be prepared.
+2. Open Settings → General → Keyboard → Keyboards → Add New Keyboard.
+3. Choose Scribe, then enable **Allow Full Access**.
+
+The handoff through the containing app is required because iOS does not give custom keyboard extensions direct microphone access. See [the iOS architecture](docs/ios-architecture.md) for implementation details.
+
 ## Install
 
 Download `Scribe-1.5.dmg` from the [Releases](https://github.com/sohailmamdani/scribe/releases) page, open it, drag `Scribe.app` to `/Applications`. The first launch downloads the Whisper model — give it a couple of minutes.
@@ -45,6 +63,8 @@ open Scribe.xcodeproj
 ```
 
 Then ⌘R in Xcode. Swift Package Manager will resolve `argmax-oss-swift` and `Sparkle` on first open.
+
+Choose the `Scribe iOS` scheme to build the iPhone/iPad app and its keyboard extension, or `Scribe` for the original macOS app.
 
 ## Releasing (maintainer only)
 

@@ -9,16 +9,94 @@
 /* Begin PBXBuildFile section */
 		A6AA99612EC58712008E6C05 /* ArgmaxOSS in Frameworks */ = {isa = PBXBuildFile; productRef = A6AA99602EC58712008E6C05 /* ArgmaxOSS */; };
 		A6AA99722EC60001008E6C05 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A6AA99712EC60001008E6C05 /* Sparkle */; };
+		B70000000000000000000001 /* ArgmaxOSS in Frameworks */ = {isa = PBXBuildFile; productRef = B70000000000000000000081 /* ArgmaxOSS */; };
+		B70000000000000000000002 /* ScribeKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B70000000000000000000012 /* ScribeKeyboard.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		B70000000000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B70000000000000000000013 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B70000000000000000000051 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A6AA99362EC5866B008E6C05 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B70000000000000000000042;
+			remoteInfo = ScribeKeyboard;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B70000000000000000000033 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B70000000000000000000002 /* ScribeKeyboard.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A6AA993E2EC5866B008E6C05 /* Scribe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Scribe.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B70000000000000000000011 /* Scribe iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "Scribe iOS.app"; path = Scribe.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B70000000000000000000012 /* ScribeKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ScribeKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B70000000000000000000013 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Scribe/Assets.xcassets; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		B70000000000000000000026 /* Exceptions for "Scribe" folder in "Scribe" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A6AA993D2EC5866B008E6C05 /* Scribe */;
+		};
+		B70000000000000000000024 /* Exceptions for "ScribeMobile" folder in "Scribe iOS" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B70000000000000000000041 /* Scribe iOS */;
+		};
+		B70000000000000000000025 /* Exceptions for "ScribeKeyboard" folder in "ScribeKeyboard" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B70000000000000000000042 /* ScribeKeyboard */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A6AA99402EC5866B008E6C05 /* Scribe */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B70000000000000000000026 /* Exceptions for "Scribe" folder in "Scribe" target */,
+			);
 			path = Scribe;
+			sourceTree = "<group>";
+		};
+		B70000000000000000000021 /* ScribeMobile */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B70000000000000000000024 /* Exceptions for "ScribeMobile" folder in "Scribe iOS" target */,
+			);
+			path = ScribeMobile;
+			sourceTree = "<group>";
+		};
+		B70000000000000000000022 /* ScribeKeyboard */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B70000000000000000000025 /* Exceptions for "ScribeKeyboard" folder in "ScribeKeyboard" target */,
+			);
+			path = ScribeKeyboard;
+			sourceTree = "<group>";
+		};
+		B70000000000000000000023 /* ScribeShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ScribeShared;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -33,6 +111,21 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B70000000000000000000031 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B70000000000000000000001 /* ArgmaxOSS in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B70000000000000000000032 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -40,6 +133,10 @@
 			isa = PBXGroup;
 			children = (
 				A6AA99402EC5866B008E6C05 /* Scribe */,
+				B70000000000000000000013 /* Assets.xcassets */,
+				B70000000000000000000021 /* ScribeMobile */,
+				B70000000000000000000022 /* ScribeKeyboard */,
+				B70000000000000000000023 /* ScribeShared */,
 				A6AA993F2EC5866B008E6C05 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -48,6 +145,8 @@
 			isa = PBXGroup;
 			children = (
 				A6AA993E2EC5866B008E6C05 /* Scribe.app */,
+				B70000000000000000000011 /* Scribe iOS.app */,
+				B70000000000000000000012 /* ScribeKeyboard.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -79,6 +178,55 @@
 			productReference = A6AA993E2EC5866B008E6C05 /* Scribe.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B70000000000000000000041 /* Scribe iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B70000000000000000000071 /* Build configuration list for PBXNativeTarget "Scribe iOS" */;
+			buildPhases = (
+				B70000000000000000000036 /* Sources */,
+				B70000000000000000000031 /* Frameworks */,
+				B70000000000000000000034 /* Resources */,
+				B70000000000000000000033 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B70000000000000000000052 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B70000000000000000000021 /* ScribeMobile */,
+				B70000000000000000000023 /* ScribeShared */,
+			);
+			name = "Scribe iOS";
+			packageProductDependencies = (
+				B70000000000000000000081 /* ArgmaxOSS */,
+			);
+			productName = Scribe;
+			productReference = B70000000000000000000011 /* Scribe iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B70000000000000000000042 /* ScribeKeyboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B70000000000000000000072 /* Build configuration list for PBXNativeTarget "ScribeKeyboard" */;
+			buildPhases = (
+				B70000000000000000000037 /* Sources */,
+				B70000000000000000000032 /* Frameworks */,
+				B70000000000000000000035 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B70000000000000000000022 /* ScribeKeyboard */,
+				B70000000000000000000023 /* ScribeShared */,
+			);
+			name = ScribeKeyboard;
+			packageProductDependencies = (
+			);
+			productName = ScribeKeyboard;
+			productReference = B70000000000000000000012 /* ScribeKeyboard.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -91,6 +239,12 @@
 				TargetAttributes = {
 					A6AA993D2EC5866B008E6C05 = {
 						CreatedOnToolsVersion = 26.1;
+					};
+					B70000000000000000000041 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					B70000000000000000000042 = {
+						CreatedOnToolsVersion = 26.2;
 					};
 				};
 			};
@@ -113,12 +267,29 @@
 			projectRoot = "";
 			targets = (
 				A6AA993D2EC5866B008E6C05 /* Scribe */,
+				B70000000000000000000041 /* Scribe iOS */,
+				B70000000000000000000042 /* ScribeKeyboard */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A6AA993C2EC5866B008E6C05 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B70000000000000000000034 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B70000000000000000000003 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B70000000000000000000035 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,7 +306,29 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B70000000000000000000036 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B70000000000000000000037 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B70000000000000000000052 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B70000000000000000000042 /* ScribeKeyboard */;
+			targetProxy = B70000000000000000000051 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A6AA99472EC5866C008E6C05 /* Debug */ = {
@@ -346,6 +539,134 @@
 			};
 			name = Release;
 		};
+		B70000000000000000000061 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ScribeMobile/ScribeMobile.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = N3WXD74E2V;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ScribeMobile/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sohail.Scribe.mobile;
+				PRODUCT_NAME = Scribe;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B70000000000000000000062 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ScribeMobile/ScribeMobile.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = N3WXD74E2V;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ScribeMobile/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sohail.Scribe.mobile;
+				PRODUCT_NAME = Scribe;
+				PROVISIONING_PROFILE_SPECIFIER = "Scribe iOS App Store";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		B70000000000000000000063 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ScribeKeyboard/ScribeKeyboard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = N3WXD74E2V;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ScribeKeyboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sohail.Scribe.mobile.keyboard;
+				PRODUCT_NAME = ScribeKeyboard;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B70000000000000000000064 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ScribeKeyboard/ScribeKeyboard.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = N3WXD74E2V;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ScribeKeyboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sohail.Scribe.mobile.keyboard;
+				PRODUCT_NAME = ScribeKeyboard;
+				PROVISIONING_PROFILE_SPECIFIER = "Scribe Keyboard App Store";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -363,6 +684,24 @@
 			buildConfigurations = (
 				A6AA994A2EC5866C008E6C05 /* Debug */,
 				A6AA994B2EC5866C008E6C05 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B70000000000000000000071 /* Build configuration list for PBXNativeTarget "Scribe iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B70000000000000000000061 /* Debug */,
+				B70000000000000000000062 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B70000000000000000000072 /* Build configuration list for PBXNativeTarget "ScribeKeyboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B70000000000000000000063 /* Debug */,
+				B70000000000000000000064 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -398,6 +737,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A6AA99702EC60001008E6C05 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		B70000000000000000000081 /* ArgmaxOSS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A6AA995F2EC58712008E6C05 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
+			productName = ArgmaxOSS;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
