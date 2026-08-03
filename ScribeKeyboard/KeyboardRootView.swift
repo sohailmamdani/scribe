@@ -18,6 +18,7 @@ struct KeyboardRootView: View {
     let context: () -> (String?, String?)
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
 
+    @Environment(\.openURL) private var openURL
     @StateObject private var state = KeyboardDictationState()
     @StateObject private var deleteRepeater = KeyRepeatEngine()
     @State private var isShifted = true
@@ -513,9 +514,16 @@ struct KeyboardRootView: View {
             return
         }
 
-        openContainingApp(url) { success in
-            Task { @MainActor in
-                if !success { state.handoffDidFail() }
+        // SwiftUI's OpenURLAction is the only URL-opening mechanism that
+        // still works from keyboard extensions on iOS 18+. The legacy
+        // responder-chain / extensionContext paths remain as fallbacks for
+        // older systems.
+        openURL(url) { accepted in
+            guard !accepted else { return }
+            openContainingApp(url) { success in
+                Task { @MainActor in
+                    if !success { state.handoffDidFail() }
+                }
             }
         }
     }
@@ -644,11 +652,17 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         let age = Date().timeIntervalSince(store.updatedAt)
         let isStale = switch phase {
         case .recording: age > 10
-        case .launching, .preparing, .transcribing: age > 300
+        // If the app were launching it would update the store within a
+        // couple of seconds, so a stale .launching means the open failed.
+        case .launching: age > 12
+        case .preparing, .transcribing: age > 300
         case .idle, .completed, .failed: false
         }
         if isStale {
-            store.fail("Scribe stopped responding. Tap Retry to reconnect.", retryAvailable: retryAvailable)
+            let failureMessage = phase == .launching
+                ? "Scribe couldn’t open. Tap Retry."
+                : "Scribe stopped responding. Tap Retry to reconnect."
+            store.fail(failureMessage, retryAvailable: retryAvailable)
             phase = .failed
             message = store.message
             return
