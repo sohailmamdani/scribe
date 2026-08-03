@@ -546,7 +546,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ScribeMobile/ScribeMobile.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = N3WXD74E2V;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScribeMobile/Info.plist;
@@ -578,7 +578,7 @@
 				CODE_SIGN_ENTITLEMENTS = ScribeMobile/ScribeMobile.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = N3WXD74E2V;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScribeMobile/Info.plist;
@@ -608,7 +608,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScribeKeyboard/ScribeKeyboard.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = N3WXD74E2V;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScribeKeyboard/Info.plist;
@@ -641,7 +641,7 @@
 				CODE_SIGN_ENTITLEMENTS = ScribeKeyboard/ScribeKeyboard.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = N3WXD74E2V;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScribeKeyboard/Info.plist;

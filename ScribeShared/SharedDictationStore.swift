@@ -33,6 +33,9 @@ struct SharedDictationStore {
         static let audioLevel = "dictation.audioLevel"
         static let retryAvailable = "dictation.retryAvailable"
         static let updatedAt = "dictation.updatedAt"
+        static let sessionActive = "dictation.sessionActive"
+        static let sessionHeartbeat = "dictation.sessionHeartbeat"
+        static let sessionExpiresAt = "dictation.sessionExpiresAt"
     }
 
     private let defaults: UserDefaults
@@ -76,6 +79,39 @@ struct SharedDictationStore {
 
     var updatedAt: Date {
         defaults.object(forKey: Key.updatedAt) as? Date ?? .distantPast
+    }
+
+    // MARK: - Flow session
+
+    /// While a flow session is active the app keeps the microphone alive in
+    /// the background, so the keyboard can start dictation with a command
+    /// instead of opening the app. Written only by the app.
+
+    var sessionActive: Bool {
+        get { defaults.bool(forKey: Key.sessionActive) }
+        nonmutating set { defaults.set(newValue, forKey: Key.sessionActive) }
+    }
+
+    var sessionHeartbeat: Date {
+        get { defaults.object(forKey: Key.sessionHeartbeat) as? Date ?? .distantPast }
+        nonmutating set { defaults.set(newValue, forKey: Key.sessionHeartbeat) }
+    }
+
+    var sessionExpiresAt: Date {
+        get { defaults.object(forKey: Key.sessionExpiresAt) as? Date ?? .distantPast }
+        nonmutating set { defaults.set(newValue, forKey: Key.sessionExpiresAt) }
+    }
+
+    /// True when the app's session heartbeat is fresh enough for the keyboard
+    /// to trust that a start command will be picked up promptly.
+    var isSessionAlive: Bool {
+        sessionActive
+            && Date() < sessionExpiresAt
+            && Date().timeIntervalSince(sessionHeartbeat) < 5
+    }
+
+    func endSession() {
+        defaults.set(false, forKey: Key.sessionActive)
     }
 
     func issue(_ command: DictationCommand) {

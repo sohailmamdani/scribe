@@ -10,6 +10,7 @@ struct MobileContentView: View {
                 VStack(spacing: 24) {
                     hero
                     statusCard
+                    if coordinator.isSessionActive { sessionCard }
 					if !coordinator.history.isEmpty { historyCard }
                     setupCard
                     privacyCard
@@ -108,6 +109,29 @@ struct MobileContentView: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
+    private var sessionCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Flow session active", systemImage: "mic.badge.plus")
+                    .font(.headline)
+                    .foregroundStyle(.green)
+                Spacer()
+                Button("End", role: .destructive) { coordinator.endFlowSession() }
+                    .font(.subheadline.weight(.semibold))
+            }
+            Text("The mic stays ready so the keyboard can dictate in any app without opening Scribe. The session ends 15 minutes after your last dictation.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if let expiry = coordinator.sessionExpiresAt {
+                Text("Ends at \(expiry, style: .time) unless you keep dictating")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(18)
+        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
     private var setupCard: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("Use Scribe in every app", systemImage: "keyboard")
@@ -115,7 +139,7 @@ struct MobileContentView: View {
 
             setupRow(1, "Add Scribe Keyboard", "Settings → General → Keyboard → Keyboards")
             setupRow(2, "Allow Full Access", "Required only for private app-to-keyboard handoff")
-            setupRow(3, "Tap Dictate", "Scribe opens and starts recording; swipe back to keep typing")
+            setupRow(3, "Tap Dictate", "The first tap opens Scribe to start a session; after that, dictate anywhere without leaving your app")
 
             Button("Open Scribe Settings") {
                 guard let url = URL(string: UIApplication.openSettingsURLString) else { return }

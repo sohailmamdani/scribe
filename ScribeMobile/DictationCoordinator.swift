@@ -31,6 +31,8 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
     @Published private(set) var audioLevel: Double = 0
 	@Published private(set) var history: [HistoryItem] = []
 	@Published private(set) var canRetryFailedTranscription = false
+	@Published private(set) var isSessionActive = false
+	@Published private(set) var sessionExpiresAt: Date?
 
     private let logger = Logger(subsystem: "sohail.Scribe.mobile", category: "Dictation")
     private let sharedStore = SharedDictationStore()
@@ -40,13 +42,16 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
     private var recordingURL: URL?
 	private var pendingRecordingURL: URL?
     private var meterTask: Task<Void, Never>?
-    private var commandTask: Task<Void, Never>?
+    private var sessionTask: Task<Void, Never>?
+    private var keepAliveRecorder: AVAudioRecorder?
+    private var interruptionObserver: NSObjectProtocol?
     private var isPreparingModel = false
 	private var isTranscribing = false
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 	private var lastHeartbeat = Date.distantPast
 	private let pendingRecordingPathKey = "mobile.pendingRecordingPath"
 	private static let savedRecordingMessage = "Transcription failed, but your recording is saved. Tap Retry."
+	private static let sessionDuration: TimeInterval = 15 * 60
 
     override init() {
         super.init()
@@ -66,11 +71,16 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
 				sharedStore.fail(Self.savedRecordingMessage, retryAvailable: true)
 			}
 		}
+		// A fresh launch means any previously advertised session is gone.
+		sharedStore.endSession()
     }
 
     deinit {
         meterTask?.cancel()
-        commandTask?.cancel()
+        sessionTask?.cancel()
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
     }
 
     func prepareModel() async {
@@ -115,19 +125,17 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
         }
     }
 
-    func startRecording() async {
-        guard audioRecorder == nil else { return }
-		discardPendingRecording()
+    // MARK: - Flow session
+    //
+    // A flow session keeps the microphone alive (via a throwaway keep-alive
+    // recorder) so the app stays running in the background and the keyboard
+    // can start dictations with a shared-store command instead of opening the
+    // app each time. Sessions extend on activity and end after 15 idle
+    // minutes, on interruption, or when the user ends them.
 
-        sharedStore.phase = .preparing
-        sharedStore.message = "Preparing on-device transcription"
-		sharedStore.retryAvailable = false
-		canRetryFailedTranscription = false
-
-        do {
-            try await prepareModelIfNeeded(mode: .balanced)
-        } catch {
-            presentModelPreparationFailure(error)
+    func startFlowSession() async {
+        if isSessionActive {
+            extendSession()
             return
         }
 
@@ -147,7 +155,146 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
                 options: [.defaultToSpeaker, .allowBluetoothHFP]
             )
             try session.setActive(true)
+        } catch {
+            presentRecordingFailure(error)
+            return
+        }
 
+        isSessionActive = true
+        extendSession()
+        startKeepAliveRecorderIfIdle()
+        observeInterruptions()
+        startSessionLoop()
+    }
+
+    func endFlowSession() {
+        stopKeepAliveRecorder()
+        sessionTask?.cancel()
+        sessionTask = nil
+        isSessionActive = false
+        sessionExpiresAt = nil
+        sharedStore.endSession()
+        if audioRecorder == nil, !isTranscribing {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+
+    private func extendSession() {
+        let expiry = Date().addingTimeInterval(Self.sessionDuration)
+        sessionExpiresAt = expiry
+        sharedStore.sessionActive = true
+        sharedStore.sessionExpiresAt = expiry
+        sharedStore.sessionHeartbeat = Date()
+    }
+
+    private func startSessionLoop() {
+        sessionTask?.cancel()
+        sessionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(400))
+                guard let self, self.isSessionActive else { return }
+
+                self.sharedStore.sessionHeartbeat = Date()
+                if let expiry = self.sessionExpiresAt, Date() > expiry,
+                   self.audioRecorder == nil, !self.isTranscribing {
+                    self.endFlowSession()
+                    return
+                }
+
+                switch self.sharedStore.consumeCommand() {
+                case .start:
+                    await self.startRecording()
+                case .stop:
+                    await self.stopAndTranscribe()
+                case .cancel:
+                    self.cancelRecording()
+                case .retry:
+                    await self.retryLastTranscription()
+                case .none:
+                    break
+                }
+            }
+        }
+    }
+
+    private func startKeepAliveRecorderIfIdle() {
+        guard isSessionActive, audioRecorder == nil, keepAliveRecorder == nil else { return }
+        let url = Self.keepAliveURL
+        try? FileManager.default.removeItem(at: url)
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.min.rawValue,
+        ]
+        keepAliveRecorder = try? AVAudioRecorder(url: url, settings: settings)
+        keepAliveRecorder?.record()
+    }
+
+    private func stopKeepAliveRecorder() {
+        keepAliveRecorder?.stop()
+        keepAliveRecorder = nil
+        try? FileManager.default.removeItem(at: Self.keepAliveURL)
+    }
+
+    private static var keepAliveURL: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("scribe-keepalive.m4a")
+    }
+
+    private func observeInterruptions() {
+        guard interruptionObserver == nil else { return }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+            Task { @MainActor [weak self] in
+                self?.handleAudioInterruption()
+            }
+        }
+    }
+
+    private func handleAudioInterruption() {
+        if audioRecorder != nil {
+            audioRecorder?.stop()
+            audioRecorder = nil
+            recordingURL = nil
+            meterTask?.cancel()
+            meterTask = nil
+            audioLevel = 0
+            sharedStore.audioLevel = 0
+            canRetryFailedTranscription = pendingRecordingURL != nil
+            state = .failed(Self.savedRecordingMessage)
+            sharedStore.fail(Self.savedRecordingMessage, retryAvailable: canRetryFailedTranscription)
+        }
+        endFlowSession()
+    }
+
+    // MARK: - Dictation
+
+    func startRecording() async {
+        guard audioRecorder == nil else { return }
+		discardPendingRecording()
+
+        sharedStore.phase = .preparing
+        sharedStore.message = "Preparing on-device transcription"
+		sharedStore.retryAvailable = false
+		canRetryFailedTranscription = false
+
+        do {
+            try await prepareModelIfNeeded(mode: .balanced)
+        } catch {
+            presentModelPreparationFailure(error)
+            return
+        }
+
+        await startFlowSession()
+        guard isSessionActive else { return }
+        stopKeepAliveRecorder()
+
+        do {
             let url = try makePendingRecordingURL()
             let settings: [String: Any] = [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
@@ -178,9 +325,9 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
                     try? await Task.sleep(for: .milliseconds(80))
                 }
             }
-            watchForKeyboardCommands()
         } catch {
 			discardPendingRecording()
+			startKeepAliveRecorderIfIdle()
             presentRecordingFailure(error)
         }
     }
@@ -193,8 +340,6 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
         recordingURL = nil
         meterTask?.cancel()
         meterTask = nil
-        commandTask?.cancel()
-        commandTask = nil
         audioLevel = 0
         sharedStore.audioLevel = 0
         state = .transcribing
@@ -227,7 +372,12 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
 
         defer {
 			isTranscribing = false
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+			if isSessionActive {
+				extendSession()
+				startKeepAliveRecorderIfIdle()
+			} else {
+				try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+			}
             endBackgroundTask()
         }
 
@@ -263,9 +413,12 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
 		discardPendingRecording()
         meterTask?.cancel()
         meterTask = nil
-        commandTask?.cancel()
-        commandTask = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if isSessionActive {
+            extendSession()
+            startKeepAliveRecorderIfIdle()
+        } else {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         audioLevel = 0
 		canRetryFailedTranscription = false
         sharedStore.reset()
@@ -282,29 +435,6 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
 			lastHeartbeat = Date()
 			sharedStore.message = "Listening…"
 		}
-    }
-
-    private func watchForKeyboardCommands() {
-        commandTask?.cancel()
-        commandTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(150))
-                guard let self else { return }
-                switch self.sharedStore.consumeCommand() {
-                case .stop:
-                    await self.stopAndTranscribe()
-                    return
-                case .cancel:
-                    self.cancelRecording()
-                    return
-                case .retry:
-					await self.retryLastTranscription()
-					return
-                case .start, .none:
-                    break
-                }
-            }
-        }
     }
 
 	private func prepareModelIfNeeded(mode: ModelMode) async throws {

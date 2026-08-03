@@ -77,6 +77,12 @@ struct KeyboardRootView: View {
             }
         }
         .onDisappear { state.stop() }
+        .onChange(of: state.handoffFallbackNeeded) { _, needed in
+            guard needed else { return }
+            state.handoffFallbackNeeded = false
+            state.beginRecordingHandoff()
+            openScribe(path: "dictate")
+        }
     }
 
     // MARK: - Key area
@@ -456,10 +462,12 @@ struct KeyboardRootView: View {
                 Spacer()
                 Button("Retry") { retryOrBeginDictation() }.font(.caption.bold())
             case .idle, .completed:
-                Image(systemName: "lock.fill")
+                Image(systemName: state.sessionAlive ? "mic.badge.plus" : "lock.fill")
                     .font(.caption)
                     .foregroundStyle(.green)
-                Text(hasFullAccess ? "On-device dictation" : "Full Access required")
+                Text(hasFullAccess
+                     ? (state.sessionAlive ? "Session live — instant dictation" : "On-device dictation")
+                     : "Full Access required")
                     .font(.subheadline.weight(.medium))
                 Spacer()
                 if lastInsertedText != nil {
@@ -490,8 +498,12 @@ struct KeyboardRootView: View {
             return
         }
         lastInsertedText = nil
-        state.beginRecordingHandoff()
-        openScribe(path: "dictate")
+        if state.sessionAlive {
+            state.beginRemoteStart()
+        } else {
+            state.beginRecordingHandoff()
+            openScribe(path: "dictate")
+        }
     }
 
     private func retryOrBeginDictation() {
@@ -501,8 +513,12 @@ struct KeyboardRootView: View {
         }
 
         if state.retryAvailable {
-            state.beginRetryHandoff()
-            openScribe(path: "retry")
+            if state.sessionAlive {
+                state.beginRetryRemote()
+            } else {
+                state.beginRetryHandoff()
+                openScribe(path: "retry")
+            }
         } else {
             beginDictation()
         }
@@ -583,11 +599,14 @@ final class KeyboardDictationState: NSObject, ObservableObject {
     @Published private(set) var message = ""
     @Published private(set) var audioLevel: Double = 0
     @Published private(set) var retryAvailable = false
+    @Published private(set) var sessionAlive = false
+    @Published var handoffFallbackNeeded = false
 
     private let store = SharedDictationStore()
     private var timer: Timer?
     private var lastResultID = ""
     private var onTranscript: ((String) -> Void)?
+    private var remoteStartIssuedAt: Date?
 
     func start(onTranscript: @escaping (String) -> Void) {
         self.onTranscript = onTranscript
@@ -614,7 +633,24 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         refresh()
     }
 
+    /// Starts dictation through the live flow session — the backgrounded app
+    /// picks the command up from the shared store, so no app switch happens.
+    func beginRemoteStart() {
+        store.issue(.start)
+        store.phase = .preparing
+        store.message = "Starting the mic…"
+        remoteStartIssuedAt = Date()
+        refresh()
+    }
+
     func beginRetryHandoff() {
+        store.issue(.retry)
+        store.phase = .preparing
+        store.message = "Retrying saved recording…"
+        refresh()
+    }
+
+    func beginRetryRemote() {
         store.issue(.retry)
         store.phase = .preparing
         store.message = "Retrying saved recording…"
@@ -648,6 +684,19 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         message = store.message
         audioLevel = store.audioLevel
         retryAvailable = store.retryAvailable
+        let alive = store.isSessionAlive
+        if alive != sessionAlive { sessionAlive = alive }
+
+        // If a session-based start went unanswered, the session died without
+        // the keyboard noticing — fall back to opening the app.
+        if let issuedAt = remoteStartIssuedAt {
+            if phase == .recording {
+                remoteStartIssuedAt = nil
+            } else if Date().timeIntervalSince(issuedAt) > 4 {
+                remoteStartIssuedAt = nil
+                handoffFallbackNeeded = true
+            }
+        }
 
         let age = Date().timeIntervalSince(store.updatedAt)
         let isStale = switch phase {
