@@ -1,5 +1,13 @@
 import Combine
 import SwiftUI
+import UIKit
+
+enum KeyID: Hashable {
+    case character(Character)
+    case shift
+    case delete
+    case layoutToggle
+}
 
 struct KeyboardRootView: View {
     let hasFullAccess: Bool
@@ -11,9 +19,22 @@ struct KeyboardRootView: View {
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
 
     @StateObject private var state = KeyboardDictationState()
+    @StateObject private var deleteRepeater = KeyRepeatEngine()
     @State private var isShifted = true
-	@State private var layout: KeyboardLayout = .letters
-	@State private var lastInsertedText: String?
+    @State private var layout: KeyboardLayout = .letters
+    @State private var lastInsertedText: String?
+
+    // Unified touch handling over the key area: frames are collected per key
+    // so one drag gesture can drive taps, hold-to-repeat delete, and swipes.
+    @State private var keyFrames: [KeyID: CGRect] = [:]
+    @State private var pressedKey: KeyID?
+    @State private var touchStart: CGPoint?
+    @State private var startKey: KeyID?
+    @State private var isSwiping = false
+    @State private var swipePoints: [CGPoint] = []
+    @State private var swipeKeys: [Character] = []
+
+    private static let keySpace = "keyArea"
 
     private enum KeyboardLayout {
         case letters
@@ -24,32 +45,17 @@ struct KeyboardRootView: View {
     var body: some View {
         VStack(spacing: 5) {
             dictationBar
-            characterRow(activeRows[0])
-            characterRow(activeRows[1])
-                .padding(.horizontal, 14)
-            HStack(spacing: 6) {
-                if layout == .letters {
-                    key(systemName: "shift.fill", width: 44, emphasized: isShifted) {
-                        isShifted.toggle()
-                    }
-                } else {
-                    textKey(layout == .numbers ? "#+=" : "123", width: 44) {
-                        layout = layout == .numbers ? .symbols : .numbers
-                    }
-                }
-                characterRow(activeRows[2])
-                key(systemName: "delete.left.fill", width: 44) { manualDelete() }
-            }
+            keyArea
             HStack(spacing: 6) {
                 if needsInputModeSwitchKey {
-                    key(systemName: "globe", width: 44) { advanceInputMode() }
+                    bottomKey(systemName: "globe", width: 44) { advanceInputMode() }
                 }
-                textKey(layout == .letters ? "123" : "ABC", width: 48) {
+                bottomKey(title: layout == .letters ? "123" : "ABC", width: 48) {
                     layout = layout == .letters ? .numbers : .letters
                     isShifted = layout == .letters
                 }
-                textKey("space", width: nil) { manualInsert(" ") }
-                key(systemName: "return", width: 52) { manualInsert("\n") }
+                bottomKey(title: "space", width: nil) { manualInsert(" ") }
+                bottomKey(systemName: "return", width: 52) { manualInsert("\n") }
             }
         }
         .padding(.horizontal, 5)
@@ -60,17 +66,353 @@ struct KeyboardRootView: View {
         .onAppear {
             state.start { transcript in
                 let surrounding = context()
-				let insertion = TranscriptPolisher.textForInsertion(
+                let insertion = TranscriptPolisher.textForInsertion(
                     transcript,
                     contextBefore: surrounding.0,
                     contextAfter: surrounding.1
-				)
-				insertText(insertion)
-				lastInsertedText = insertion
+                )
+                insertText(insertion)
+                lastInsertedText = insertion
             }
         }
         .onDisappear { state.stop() }
     }
+
+    // MARK: - Key area
+
+    private var keyArea: some View {
+        VStack(spacing: 5) {
+            characterRow(activeRows[0])
+            characterRow(activeRows[1])
+                .padding(.horizontal, 14)
+            HStack(spacing: 6) {
+                if layout == .letters {
+                    keyCap(id: .shift, width: 44, emphasized: isShifted) {
+                        Image(systemName: "shift.fill")
+                            .font(.system(size: 17, weight: .medium))
+                    }
+                } else {
+                    keyCap(id: .layoutToggle, width: 44) {
+                        Text(layout == .numbers ? "#+=" : "123")
+                            .font(.system(size: 15))
+                    }
+                }
+                characterRow(activeRows[2])
+                keyCap(id: .delete, width: 44) {
+                    Image(systemName: "delete.left.fill")
+                        .font(.system(size: 17, weight: .medium))
+                }
+            }
+        }
+        .coordinateSpace(name: Self.keySpace)
+        .onPreferenceChange(KeyFramesKey.self) { keyFrames = $0 }
+        .contentShape(Rectangle())
+        .gesture(keyDragGesture)
+        .overlay {
+            SwipeTrailShape(points: swipePoints)
+                .stroke(
+                    Color.indigo.opacity(0.55),
+                    style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round)
+                )
+                .opacity(isSwiping ? 1 : 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var activeRows: [[Character]] {
+        switch layout {
+        case .letters:
+            [Array("qwertyuiop"), Array("asdfghjkl"), Array("zxcvbnm")]
+        case .numbers:
+            [Array("1234567890"), Array("-/:;()$&@\""), Array(".,?!'")]
+        case .symbols:
+            [Array("[]{}#%^*+="), Array("_\\|~<>€£¥"), Array(".,?!'")]
+        }
+    }
+
+    private func characterRow(_ characters: [Character]) -> some View {
+        HStack(spacing: 5) {
+            ForEach(characters, id: \.self) { character in
+                let display = layout == .letters && isShifted
+                    ? String(character).uppercased()
+                    : String(character)
+                keyCap(id: .character(character), width: nil, isCharacterKey: true) {
+                    Text(display)
+                        .font(.system(size: 21))
+                }
+            }
+        }
+    }
+
+    private func keyCap<Label: View>(
+        id: KeyID,
+        width: CGFloat?,
+        emphasized: Bool = false,
+        isCharacterKey: Bool = false,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        let isPressed = pressedKey == id
+        let baseColor: Color = isCharacterKey || emphasized
+            ? Color(.systemBackground)
+            : Color(.systemGray3)
+        return label()
+            .foregroundStyle(.primary)
+            .frame(maxWidth: width == nil ? .infinity : nil)
+            .frame(width: width, height: 41)
+            .background(
+                isPressed ? Color(.systemGray2) : baseColor,
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .shadow(color: .black.opacity(isCharacterKey ? 0.18 : 0.16), radius: 0, y: 1)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: KeyFramesKey.self,
+                        value: [id: proxy.frame(in: .named(Self.keySpace))]
+                    )
+                }
+            )
+    }
+
+    private func bottomKey(
+        title: String? = nil,
+        systemName: String? = nil,
+        width: CGFloat?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Group {
+                if let systemName {
+                    Image(systemName: systemName)
+                        .font(.system(size: 17, weight: .medium))
+                } else {
+                    Text(title ?? "")
+                        .font(.system(size: 15))
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(maxWidth: width == nil ? .infinity : nil)
+            .frame(width: width, height: 41)
+            .background(Color(.systemGray3), in: RoundedRectangle(cornerRadius: 6))
+            .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
+        }
+        .buttonStyle(HapticKeyStyle())
+    }
+
+    // MARK: - Touch handling
+
+    private var keyDragGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.keySpace))
+            .onChanged { value in
+                if touchStart == nil {
+                    touchBegan(at: value.location)
+                } else {
+                    touchMoved(to: value.location)
+                }
+            }
+            .onEnded { value in
+                touchEnded(at: value.location)
+            }
+    }
+
+    private func touchBegan(at point: CGPoint) {
+        touchStart = point
+        let key = key(at: point)
+        startKey = key
+        pressedKey = key
+        guard let key else { return }
+        KeyboardHaptics.keyDown()
+        if key == .delete {
+            manualDelete()
+            deleteRepeater.begin(
+                deleteCharacter: {
+                    manualDelete()
+                    KeyboardHaptics.deleteTick()
+                },
+                deleteWord: {
+                    deleteWordBackward()
+                    KeyboardHaptics.deleteTick()
+                }
+            )
+        }
+    }
+
+    private func touchMoved(to point: CGPoint) {
+        guard let start = touchStart else { return }
+
+        if isSwiping {
+            appendSwipePoint(point)
+            if let letter = letterKey(at: point) {
+                pressedKey = .character(letter)
+            }
+            return
+        }
+
+        if case .character(let character)? = startKey,
+           layout == .letters,
+           character.isLetter,
+           hypot(point.x - start.x, point.y - start.y) > 24 {
+            isSwiping = true
+            swipePoints = [start, point]
+            swipeKeys = []
+            if let first = letterKey(at: start) { swipeKeys.append(first) }
+            if let current = letterKey(at: point), current != swipeKeys.last {
+                swipeKeys.append(current)
+            }
+            return
+        }
+
+        if startKey == .delete {
+            if key(at: point) != .delete {
+                deleteRepeater.stop()
+                pressedKey = nil
+            }
+        } else {
+            pressedKey = key(at: point)
+        }
+    }
+
+    private func touchEnded(at point: CGPoint) {
+        deleteRepeater.stop()
+        defer {
+            touchStart = nil
+            startKey = nil
+            pressedKey = nil
+            isSwiping = false
+            swipePoints = []
+            swipeKeys = []
+        }
+
+        if isSwiping {
+            commitSwipe()
+            return
+        }
+
+        guard let key = key(at: point) else { return }
+        switch key {
+        case .character(let character):
+            let value = layout == .letters && isShifted
+                ? String(character).uppercased()
+                : String(character)
+            manualInsert(value)
+            if layout == .letters { isShifted = false }
+        case .shift:
+            isShifted.toggle()
+        case .layoutToggle:
+            layout = layout == .numbers ? .symbols : .numbers
+        case .delete:
+            break
+        }
+    }
+
+    private func appendSwipePoint(_ point: CGPoint) {
+        if let last = swipePoints.last, hypot(point.x - last.x, point.y - last.y) < 3 {
+            return
+        }
+        swipePoints.append(point)
+        if let letter = letterKey(at: point), letter != swipeKeys.last {
+            swipeKeys.append(letter)
+        }
+    }
+
+    private func commitSwipe() {
+        guard let word = SwipeWordDecoder.shared.decode(keys: swipeKeys) else {
+            KeyboardHaptics.swipeFailed()
+            return
+        }
+        var text = isShifted ? word.prefix(1).uppercased() + word.dropFirst() : word
+        if let before = context().0, let lastCharacter = before.last,
+           needsLeadingSpace(after: lastCharacter) {
+            text = " " + text
+        }
+        manualInsert(text)
+        isShifted = false
+        KeyboardHaptics.swipeCommit()
+    }
+
+    private func needsLeadingSpace(after character: Character) -> Bool {
+        if character.isWhitespace { return false }
+        return !"([{\"'“‘@#$/_-–—".contains(character)
+    }
+
+    private func key(at point: CGPoint) -> KeyID? {
+        if let hit = keyFrames.first(where: { $0.value.contains(point) }) {
+            return hit.key
+        }
+        let nearest = keyFrames.min { lhs, rhs in
+            distance(from: lhs.value, to: point) < distance(from: rhs.value, to: point)
+        }
+        guard let nearest, distance(from: nearest.value, to: point) < 30 else { return nil }
+        return nearest.key
+    }
+
+    private func letterKey(at point: CGPoint) -> Character? {
+        guard layout == .letters else { return nil }
+        var best: (letter: Character, distance: CGFloat)?
+        for (id, frame) in keyFrames {
+            guard case .character(let character) = id, character.isLetter else { continue }
+            let d = distance(from: frame, to: point)
+            if best == nil || d < best!.distance {
+                best = (character, d)
+            }
+        }
+        guard let best, best.distance < 40 else { return nil }
+        return best.letter
+    }
+
+    private func distance(from frame: CGRect, to point: CGPoint) -> CGFloat {
+        hypot(frame.midX - point.x, frame.midY - point.y)
+    }
+
+    // MARK: - Text mutation
+
+    private func manualInsert(_ text: String) {
+        lastInsertedText = nil
+        insertText(text)
+    }
+
+    private func manualDelete() {
+        lastInsertedText = nil
+        deleteBackward()
+    }
+
+    private func deleteWordBackward() {
+        lastInsertedText = nil
+        let before = context().0 ?? ""
+        var count = 0
+        var index = before.endIndex
+        while index > before.startIndex {
+            let previous = before.index(before: index)
+            guard before[previous].isWhitespace else { break }
+            count += 1
+            index = previous
+        }
+        while index > before.startIndex {
+            let previous = before.index(before: index)
+            guard !before[previous].isWhitespace else { break }
+            count += 1
+            index = previous
+        }
+        for _ in 0..<max(count, 1) {
+            deleteBackward()
+        }
+    }
+
+    private func undoLastInsertion() {
+        guard let lastInsertedText,
+              let textBeforeCursor = context().0,
+              textBeforeCursor.hasSuffix(lastInsertedText) else {
+            self.lastInsertedText = nil
+            return
+        }
+
+        for _ in lastInsertedText {
+            deleteBackward()
+        }
+        self.lastInsertedText = nil
+    }
+
+    // MARK: - Dictation bar
 
     @ViewBuilder
     private var dictationBar: some View {
@@ -119,13 +461,13 @@ struct KeyboardRootView: View {
                 Text(hasFullAccess ? "On-device dictation" : "Full Access required")
                     .font(.subheadline.weight(.medium))
                 Spacer()
-				if lastInsertedText != nil {
-					Button { undoLastInsertion() } label: {
-						Image(systemName: "arrow.uturn.backward")
-							.frame(width: 34, height: 34)
-					}
-					.accessibilityLabel("Undo last dictation")
-				}
+                if lastInsertedText != nil {
+                    Button { undoLastInsertion() } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .frame(width: 34, height: 34)
+                    }
+                    .accessibilityLabel("Undo last dictation")
+                }
                 Button { beginDictation() } label: {
                     Label("Dictate", systemImage: "mic.fill")
                         .font(.subheadline.bold())
@@ -146,7 +488,7 @@ struct KeyboardRootView: View {
             state.showFullAccessError()
             return
         }
-		lastInsertedText = nil
+        lastInsertedText = nil
         state.beginRecordingHandoff()
         openScribe(path: "dictate")
     }
@@ -177,89 +519,37 @@ struct KeyboardRootView: View {
             }
         }
     }
+}
 
-    private var activeRows: [[Character]] {
-        switch layout {
-        case .letters:
-            [Array("qwertyuiop"), Array("asdfghjkl"), Array("zxcvbnm")]
-        case .numbers:
-            [Array("1234567890"), Array("-/:;()$&@\""), Array(".,?!'")]
-        case .symbols:
-            [Array("[]{}#%^*+="), Array("_\\|~<>€£¥"), Array(".,?!'")]
-        }
+private struct KeyFramesKey: PreferenceKey {
+    static let defaultValue: [KeyID: CGRect] = [:]
+
+    static func reduce(value: inout [KeyID: CGRect], nextValue: () -> [KeyID: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
+}
 
-    private func characterRow(_ characters: [Character]) -> some View {
-        HStack(spacing: 5) {
-            ForEach(characters, id: \.self) { character in
-                Button {
-                    let value = layout == .letters && isShifted
-                        ? String(character).uppercased()
-                        : String(character)
-					manualInsert(value)
-                    if layout == .letters { isShifted = false }
-                } label: {
-                    Text(layout == .letters && isShifted
-                         ? String(character).uppercased()
-                         : String(character))
-                        .font(.system(size: 21))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, minHeight: 41)
-                        .background(.background, in: RoundedRectangle(cornerRadius: 6))
-                        .shadow(color: .black.opacity(0.18), radius: 0, y: 1)
-                }
-                .buttonStyle(.plain)
+private struct SwipeTrailShape: Shape {
+    var points: [CGPoint]
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        return path
+    }
+}
+
+private struct HapticKeyStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .brightness(configuration.isPressed ? -0.08 : 0)
+            .onChange(of: configuration.isPressed) { _, isPressed in
+                if isPressed { KeyboardHaptics.keyDown() }
             }
-        }
-    }
-
-	private func manualInsert(_ text: String) {
-		lastInsertedText = nil
-		insertText(text)
-	}
-
-	private func manualDelete() {
-		lastInsertedText = nil
-		deleteBackward()
-	}
-
-	private func undoLastInsertion() {
-		guard let lastInsertedText,
-		      let textBeforeCursor = context().0,
-		      textBeforeCursor.hasSuffix(lastInsertedText) else {
-			self.lastInsertedText = nil
-			return
-		}
-
-		for _ in lastInsertedText {
-			deleteBackward()
-		}
-		self.lastInsertedText = nil
-	}
-
-    private func key(systemName: String, width: CGFloat, emphasized: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(.primary)
-                .frame(width: width, height: 41)
-                .background(emphasized ? Color(.systemBackground) : Color(.systemGray3), in: RoundedRectangle(cornerRadius: 6))
-                .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func textKey(_ title: String, width: CGFloat?, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 15))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: width == nil ? .infinity : nil)
-                .frame(width: width, height: 41)
-                .background(Color(.systemGray3), in: RoundedRectangle(cornerRadius: 6))
-                .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -351,18 +641,18 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         audioLevel = store.audioLevel
         retryAvailable = store.retryAvailable
 
-		let age = Date().timeIntervalSince(store.updatedAt)
-		let isStale = switch phase {
-		case .recording: age > 10
-		case .launching, .preparing, .transcribing: age > 300
-		case .idle, .completed, .failed: false
-		}
-		if isStale {
-			store.fail("Scribe stopped responding. Tap Retry to reconnect.", retryAvailable: retryAvailable)
-			phase = .failed
-			message = store.message
-			return
-		}
+        let age = Date().timeIntervalSince(store.updatedAt)
+        let isStale = switch phase {
+        case .recording: age > 10
+        case .launching, .preparing, .transcribing: age > 300
+        case .idle, .completed, .failed: false
+        }
+        if isStale {
+            store.fail("Scribe stopped responding. Tap Retry to reconnect.", retryAvailable: retryAvailable)
+            phase = .failed
+            message = store.message
+            return
+        }
 
         let resultID = store.resultID
         guard phase == .completed, !resultID.isEmpty, resultID != lastResultID else { return }

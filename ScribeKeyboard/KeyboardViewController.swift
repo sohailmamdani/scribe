@@ -18,11 +18,11 @@ final class KeyboardViewController: UIInputViewController {
                  self?.textDocumentProxy.documentContextAfterInput)
             },
             openContainingApp: { [weak self] url, completion in
-                guard let extensionContext = self?.extensionContext else {
+                guard let self else {
                     completion(false)
                     return
                 }
-                extensionContext.open(url, completionHandler: completion)
+                self.openContainingApp(url, completion: completion)
             }
         )
 
@@ -42,5 +42,25 @@ final class KeyboardViewController: UIInputViewController {
         ])
         hostingController.didMove(toParent: self)
         self.hostingController = hostingController
+    }
+
+    /// The keyboard extension point does not support `extensionContext.open`,
+    /// so walk the responder chain to UIApplication's `openURL:` instead.
+    private func openContainingApp(_ url: URL, completion: @escaping (Bool) -> Void) {
+        let selector = sel_registerName("openURL:")
+        var responder: UIResponder? = self
+        while let current = responder {
+            if current.responds(to: selector) {
+                current.perform(selector, with: url)
+                completion(true)
+                return
+            }
+            responder = current.next
+        }
+        guard let extensionContext else {
+            completion(false)
+            return
+        }
+        extensionContext.open(url, completionHandler: completion)
     }
 }
