@@ -44,19 +44,25 @@ struct KeyboardRootView: View {
     }
 
     var body: some View {
-        VStack(spacing: 5) {
-            dictationBar
-            keyArea
-            HStack(spacing: 6) {
-                if needsInputModeSwitchKey {
-                    bottomKey(systemName: "globe", width: 44) { advanceInputMode() }
+        Group {
+            if state.phase == .recording || state.phase == .transcribing {
+                listeningPanel
+            } else {
+                VStack(spacing: 5) {
+                    dictationBar
+                    keyArea
+                    HStack(spacing: 6) {
+                        if needsInputModeSwitchKey {
+                            bottomKey(systemName: "globe", width: 44) { advanceInputMode() }
+                        }
+                        bottomKey(title: layout == .letters ? "123" : "ABC", width: 48) {
+                            layout = layout == .letters ? .numbers : .letters
+                            isShifted = layout == .letters
+                        }
+                        bottomKey(title: "space", width: nil) { manualInsert(" ") }
+                        bottomKey(systemName: "return", width: 52) { manualInsert("\n") }
+                    }
                 }
-                bottomKey(title: layout == .letters ? "123" : "ABC", width: 48) {
-                    layout = layout == .letters ? .numbers : .letters
-                    isShifted = layout == .letters
-                }
-                bottomKey(title: "space", width: nil) { manualInsert(" ") }
-                bottomKey(systemName: "return", width: 52) { manualInsert("\n") }
             }
         }
         .padding(.horizontal, 5)
@@ -75,6 +81,12 @@ struct KeyboardRootView: View {
                 insertText(insertion)
                 lastInsertedText = insertion
             }
+            // Wispr-style: with a live session, the keyboard starts listening
+            // the moment it appears.
+            if hasFullAccess, state.sessionAlive,
+               state.phase == .idle || state.phase == .completed {
+                beginDictation()
+            }
         }
         .onDisappear { state.stop() }
         .onChange(of: state.handoffFallbackNeeded) { _, needed in
@@ -83,6 +95,70 @@ struct KeyboardRootView: View {
             state.beginRecordingHandoff()
             openScribe(path: "dictate")
         }
+    }
+
+    // MARK: - Listening panel
+
+    private var listeningPanel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                if state.phase == .recording {
+                    Button {
+                        state.cancelDictation()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 44, height: 44)
+                            .background(.background, in: Circle())
+                    }
+                }
+                Spacer()
+                if state.phase == .recording {
+                    Button {
+                        state.stopRecording()
+                    } label: {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.indigo.gradient, in: Circle())
+                    }
+                }
+            }
+            Spacer()
+            if state.phase == .recording {
+                ListeningWaveform(level: state.audioLevel)
+                Text("Listening")
+                    .font(.title3.weight(.semibold))
+                    .padding(.top, 14)
+                Text("On-device · private")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            } else {
+                ProgressView()
+                    .controlSize(.large)
+                Text(state.message.isEmpty ? "Polishing your words…" : state.message)
+                    .font(.title3.weight(.semibold))
+                    .padding(.top, 14)
+            }
+            Spacer()
+            HStack {
+                if needsInputModeSwitchKey {
+                    Button {
+                        advanceInputMode()
+                    } label: {
+                        Image(systemName: "globe")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, height: 40)
+                    }
+                }
+                Spacer()
+            }
+        }
+        .padding(6)
     }
 
     // MARK: - Key area
@@ -577,6 +653,24 @@ private struct HapticKeyStyle: ButtonStyle {
     }
 }
 
+private struct ListeningWaveform: View {
+    let level: Double
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<11, id: \.self) { index in
+                let centerDistance = abs(Double(index) - 5) / 5
+                let height = 8 + level * (34 * (1 - centerDistance) + 6)
+                Capsule()
+                    .fill(.primary)
+                    .frame(width: 5, height: height)
+            }
+        }
+        .frame(height: 48)
+        .animation(.easeOut(duration: 0.1), value: level)
+    }
+}
+
 private struct WaveformView: View {
     let level: Double
 
@@ -667,6 +761,15 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         refresh()
     }
 
+    /// Cancels an in-flight dictation: tells the app to drop the recording
+    /// and returns the keyboard to typing.
+    func cancelDictation() {
+        store.issue(.cancel)
+        store.phase = .idle
+        store.message = ""
+        refresh()
+    }
+
     func stopRecording() {
         store.issue(.stop)
         store.phase = .transcribing
@@ -699,12 +802,14 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         }
 
         let age = Date().timeIntervalSince(store.updatedAt)
+        let heartbeatAge = Date().timeIntervalSince(store.sessionHeartbeat)
         let isStale = switch phase {
         case .recording: age > 10
         // If the app were launching it would update the store within a
         // couple of seconds, so a stale .launching means the open failed.
         case .launching: age > 12
-        case .preparing, .transcribing: age > 300
+        // With a session, a dead heartbeat means the app was killed mid-work.
+        case .preparing, .transcribing: age > 300 || (store.sessionActive && heartbeatAge > 10)
         case .idle, .completed, .failed: false
         }
         if isStale {

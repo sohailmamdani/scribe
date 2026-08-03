@@ -201,15 +201,18 @@ final class DictationCoordinator: NSObject, ObservableObject, AVAudioRecorderDel
                     return
                 }
 
+                // Handle commands in detached tasks so the heartbeat keeps
+                // flowing during model preparation and transcription; the
+                // handlers' own guards prevent double execution.
                 switch self.sharedStore.consumeCommand() {
                 case .start:
-                    await self.startRecording()
+                    Task { await self.startRecording() }
                 case .stop:
-                    await self.stopAndTranscribe()
+                    Task { await self.stopAndTranscribe() }
                 case .cancel:
                     self.cancelRecording()
                 case .retry:
-                    await self.retryLastTranscription()
+                    Task { await self.retryLastTranscription() }
                 case .none:
                     break
                 }
