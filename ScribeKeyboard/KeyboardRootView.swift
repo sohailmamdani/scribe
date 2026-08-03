@@ -81,12 +81,6 @@ struct KeyboardRootView: View {
                 insertText(insertion)
                 lastInsertedText = insertion
             }
-            // Wispr-style: with a live session, the keyboard starts listening
-            // the moment it appears.
-            if hasFullAccess, state.sessionAlive,
-               state.phase == .idle || state.phase == .completed {
-                beginDictation()
-            }
         }
         .onDisappear { state.stop() }
         .onChange(of: state.handoffFallbackNeeded) { _, needed in
