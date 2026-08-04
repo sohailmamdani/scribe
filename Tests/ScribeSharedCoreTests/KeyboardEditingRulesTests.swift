@@ -131,4 +131,26 @@ final class KeyboardEditingRulesTests: XCTestCase {
             KeyboardEditingRules.replacement("teh", matchingCapitalizationOf: "teh")
         )
     }
+
+    func testCorrectionDistanceTreatsAdjacentTranspositionAsOneEdit() {
+        XCTAssertEqual(KeyboardEditingRules.correctionDistance("teh", "the"), 1)
+        XCTAssertEqual(KeyboardEditingRules.correctionDistance("watre", "water"), 1)
+        XCTAssertEqual(KeyboardEditingRules.correctionDistance("keyboard", "cupboard"), 3)
+    }
+
+    func testAutomaticCorrectionOnlyCommitsCloseTypos() {
+        XCTAssertTrue(KeyboardEditingRules.shouldAutomaticallyReplace("teh", with: "the"))
+        XCTAssertTrue(KeyboardEditingRules.shouldAutomaticallyReplace("hellp", with: "hello"))
+        XCTAssertFalse(KeyboardEditingRules.shouldAutomaticallyReplace("an", with: "and"))
+        XCTAssertFalse(KeyboardEditingRules.shouldAutomaticallyReplace("house", with: "horsepower"))
+    }
+
+    func testCorrectionCandidatesAreDeduplicatedAndRejectWildGuesses() {
+        let ranked = KeyboardEditingRules.rankedCorrectionSuggestions(
+            for: "teh",
+            suggestions: ["tech", "the", "The", "keyboard"],
+            frequencyRanks: ["the": 1, "tech": 800]
+        )
+        XCTAssertEqual(ranked, ["the", "tech"])
+    }
 }

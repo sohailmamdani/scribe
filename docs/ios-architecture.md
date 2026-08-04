@@ -9,7 +9,7 @@ Scribe for iOS is split across three source roots:
 ## Dictation flow
 
 1. The keyboard writes a pending command into the shared App Group and asks iOS to wake the containing app through `scribe://wake`.
-2. When Scribe becomes active, the containing app consumes the pending command, loads a pinned WhisperKit model if needed, requests microphone access, and begins recording. Upgrades keep cached Base immediately usable while the compressed Large-v3 High Accuracy model installs in parallel.
+2. When Scribe becomes active, the containing app consumes the pending command, loads a pinned WhisperKit model if needed, requests microphone access, and begins recording. Upgrades keep cached Base immediately usable while the compressed Large-v3 High Accuracy model installs in parallel. Large-v3 keeps resumable partial files, retries interrupted transfers, prevents auto-lock during the foreground install, and reports network or storage recovery guidance.
 3. The user returns to the originating app. On iOS versions that do not switch back automatically, Scribe shows a clear swipe-back instruction. The keyboard polls the App Group and reflects recording state and audio level.
 4. Tapping stop writes a stop command. The containing app stops recording and finishes transcription under a background task.
 5. The app retries Core ML inference with the Base model in CPU-only compatibility mode if Large-v3 fails with a recognized Core ML or prediction error. The compatibility preference is versioned by model and OS version, and failed recordings remain on disk for a user-initiated retry instead of being deleted.
@@ -29,7 +29,7 @@ Both targets need the App Group enabled in the Apple Developer portal before ins
 
 ## Current product boundary
 
-The keyboard uses the same portrait key height, column width, control proportions, and spacing measured from the iOS 26 system keyboard on iPhone 17 Pro Max, with one additional native row pitch for permanent numbers. Its requested extension height includes a dedicated gap between the dictation bar and number row so neither surface is compressed or allowed to touch. Common alternates are printed on the key caps and can be entered by a downward flick, press-and-hold selection, or a named VoiceOver action. Double-space period, automatic capitalization, host-trait-aware autocorrection, hold-delete, word swiping, and space-bar cursor mode remain available.
+The keyboard uses the same portrait key height, column width, four-row control grid, and spacing measured from the iOS 26 system keyboard on iPhone 17 Pro Max. Numbers remain available through `123` and the printed downward-flick alternates instead of occupying a permanent row. Its requested extension height includes a dedicated gap below the dictation bar so neither surface is compressed or allowed to touch. Common alternates can also be entered by press-and-hold selection or a named VoiceOver action. Double-space period, automatic capitalization, host-trait-aware ranked correction suggestions, conservative delimiter autocorrection with one-tap undo, hold-delete, word swiping, and space-bar cursor mode remain available. The keyboard also respects the user's iOS supplementary lexicon so names and learned terms are not replaced.
 
 ## TestFlight release
 

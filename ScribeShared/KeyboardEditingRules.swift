@@ -120,6 +120,101 @@ enum KeyboardEditingRules {
         return trimmed
     }
 
+    /// Keeps Apple's spelling candidates in the loop, while using the bundled
+    /// frequency lexicon to break close ties. Wildly different words are
+    /// removed so they can never be committed from the suggestion bar.
+    static func rankedCorrectionSuggestions(
+        for original: String,
+        suggestions: [String],
+        frequencyRanks: [String: Int]
+    ) -> [String] {
+        let normalizedOriginal = original.lowercased()
+        var seen = Set<String>()
+        let maximumDistance: Int
+        if normalizedOriginal.count >= 8 {
+            maximumDistance = 3
+        } else if normalizedOriginal.count >= 4 {
+            maximumDistance = 2
+        } else {
+            maximumDistance = 1
+        }
+
+        return suggestions.enumerated().compactMap { index, suggestion -> (String, Int)? in
+            let normalized = suggestion
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard !normalized.isEmpty,
+                  !normalized.contains(where: \Character.isWhitespace),
+                  normalized != normalizedOriginal,
+                  seen.insert(normalized).inserted else {
+                return nil
+            }
+
+            let distance = correctionDistance(normalizedOriginal, normalized)
+            guard distance <= maximumDistance else { return nil }
+            let frequencyRank = frequencyRanks[normalized] ?? 50_000
+            let frequencyPenalty = Int(log10(Double(frequencyRank) + 1) * 4)
+            return (suggestion, distance * 100 + index * 4 + frequencyPenalty)
+        }
+        .sorted { lhs, rhs in
+            if lhs.1 != rhs.1 { return lhs.1 < rhs.1 }
+            return lhs.0.localizedCaseInsensitiveCompare(rhs.0) == .orderedAscending
+        }
+        .map(\.0)
+    }
+
+    /// Automatic replacement is deliberately conservative. A one-edit typo
+    /// (including a transposition such as "teh") is corrected on a delimiter;
+    /// broader guesses remain visible for an explicit tap.
+    static func shouldAutomaticallyReplace(_ original: String, with suggestion: String) -> Bool {
+        let source = original.lowercased()
+        let destination = suggestion.lowercased()
+        guard source.count >= 3,
+              destination.count >= 2,
+              source != destination else {
+            return false
+        }
+        return correctionDistance(source, destination) == 1
+    }
+
+    /// Optimal-string-alignment distance: Levenshtein edits plus one adjacent
+    /// transposition. That matches the common mobile typo model without
+    /// treating arbitrary anagrams as close corrections.
+    static func correctionDistance(_ source: String, _ destination: String) -> Int {
+        let lhs = Array(source)
+        let rhs = Array(destination)
+        guard !lhs.isEmpty else { return rhs.count }
+        guard !rhs.isEmpty else { return lhs.count }
+
+        var rows = Array(
+            repeating: Array(repeating: 0, count: rhs.count + 1),
+            count: lhs.count + 1
+        )
+        for index in 0...lhs.count { rows[index][0] = index }
+        for index in 0...rhs.count { rows[0][index] = index }
+
+        for leftIndex in 1...lhs.count {
+            for rightIndex in 1...rhs.count {
+                let substitutionCost = lhs[leftIndex - 1] == rhs[rightIndex - 1] ? 0 : 1
+                rows[leftIndex][rightIndex] = min(
+                    rows[leftIndex - 1][rightIndex] + 1,
+                    rows[leftIndex][rightIndex - 1] + 1,
+                    rows[leftIndex - 1][rightIndex - 1] + substitutionCost
+                )
+                if leftIndex > 1,
+                   rightIndex > 1,
+                   lhs[leftIndex - 1] == rhs[rightIndex - 2],
+                   lhs[leftIndex - 2] == rhs[rightIndex - 1] {
+                    rows[leftIndex][rightIndex] = min(
+                        rows[leftIndex][rightIndex],
+                        rows[leftIndex - 2][rightIndex - 2] + 1
+                    )
+                }
+            }
+        }
+        return rows[lhs.count][rhs.count]
+    }
+
     private static func hasUnexpectedCapitalization(_ word: String) -> Bool {
         let letters = word.filter(\Character.isLetter)
         guard letters.count > 1 else { return false }

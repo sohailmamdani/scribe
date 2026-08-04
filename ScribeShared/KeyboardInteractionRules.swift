@@ -113,11 +113,9 @@ struct KeyboardGeometryRules: Equatable {
         hostHeightAdjustment: 3
     )
 
-    var numberRowPitch: Double { keyHeight + verticalGap }
-
-    // Toolbar plus number, QWERTY, home, bottom-letter, and control rows.
+    // Toolbar plus QWERTY, home, bottom-letter, and control rows.
     var contentHeight: Double {
-        toolbarHeight + toolbarToKeyGap + 5 * keyHeight + 4 * verticalGap
+        toolbarHeight + toolbarToKeyGap + 4 * keyHeight + 3 * verticalGap
     }
     var extensionHeight: Double { contentHeight + hostHeightAdjustment }
 

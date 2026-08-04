@@ -24,7 +24,7 @@ final class KeyboardDocumentState: ObservableObject {
 final class KeyboardViewController: UIInputViewController {
     private var hostingController: UIHostingController<KeyboardRootView>?
     private let documentState = KeyboardDocumentState()
-    private let textChecker = UITextChecker()
+    private let autocorrectionEngine = KeyboardAutocorrectionEngine()
     private var keyboardHeightConstraint: NSLayoutConstraint?
 
     override func viewDidLoad() {
@@ -53,8 +53,8 @@ final class KeyboardViewController: UIInputViewController {
             autocorrectionEnabled: { [weak self] in
                 self?.textDocumentProxy.autocorrectionType != .no
             },
-            correctionForWord: { [weak self] word in
-                self?.correction(for: word)
+            correctionsForWord: { [weak self] word in
+                self?.corrections(for: word) ?? []
             },
             openContainingApp: { [weak self] url, completion in
                 guard let self else {
@@ -84,6 +84,13 @@ final class KeyboardViewController: UIInputViewController {
         hostingController.didMove(toParent: self)
         self.hostingController = hostingController
         keyboardHeightConstraint = heightConstraint
+
+        requestSupplementaryLexicon { [weak self] lexicon in
+            Task { @MainActor [weak self] in
+                self?.autocorrectionEngine.updateSupplementaryLexicon(lexicon)
+                self?.documentState.textChanged()
+            }
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -119,10 +126,8 @@ final class KeyboardViewController: UIInputViewController {
     private func updateKeyboardHeight() {
         let isCompact = traitCollection.verticalSizeClass == .compact
         let geometry = isCompact ? KeyboardGeometryRules.compact : .portrait
-        // The portrait value is the captured iOS 26 system keyboard content
-        // height plus one 56-point native key-row pitch. Keeping the complete
-        // formula in shared geometry prevents SwiftUI from compressing away
-        // the number row when the extension is laid out.
+        // Keep the complete toolbar + native four-row key-grid formula in
+        // shared geometry so SwiftUI cannot compress rows into one another.
         let desiredHeight = CGFloat(geometry.extensionHeight)
         if keyboardHeightConstraint?.constant != desiredHeight {
             keyboardHeightConstraint?.constant = desiredHeight
@@ -137,25 +142,9 @@ final class KeyboardViewController: UIInputViewController {
         extensionContext.open(url, completionHandler: completion)
     }
 
-    private func correction(for word: String) -> String? {
+    private func corrections(for word: String) -> [String] {
         let language = textDocumentProxy.documentInputMode?.primaryLanguage ?? "en-US"
-        let range = NSRange(location: 0, length: (word as NSString).length)
-        let misspelledRange = textChecker.rangeOfMisspelledWord(
-            in: word,
-            range: range,
-            startingAt: 0,
-            wrap: false,
-            language: language
-        )
-        guard misspelledRange.location != NSNotFound,
-              misspelledRange.length == range.length else {
-            return nil
-        }
-        return textChecker.guesses(
-            forWordRange: range,
-            in: word,
-            language: language
-        )?.first
+        return autocorrectionEngine.corrections(for: word, language: language)
     }
 
     private static func fieldKind(for keyboardType: UIKeyboardType) -> KeyboardFieldKind {

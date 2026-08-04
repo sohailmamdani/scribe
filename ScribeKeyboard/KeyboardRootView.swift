@@ -19,7 +19,7 @@ struct KeyboardRootView: View {
     let fieldKind: () -> KeyboardFieldKind
     let capitalizationMode: () -> KeyboardCapitalizationMode
     let autocorrectionEnabled: () -> Bool
-    let correctionForWord: (String) -> String?
+    let correctionsForWord: (String) -> [String]
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
 
     @Environment(\.openURL) private var openURL
@@ -32,6 +32,8 @@ struct KeyboardRootView: View {
     @State private var lastSpaceTapAt: Date?
     @State private var lastShiftTapAt: Date?
     @State private var observedFieldKind: KeyboardFieldKind?
+	@State private var correctionCandidates: [String] = []
+	@State private var appliedCorrection: AppliedCorrection?
 	@State private var localMutationGraceDeadline = Date.distantPast
 
     // Unified touch handling over the key area: frames are collected per key
@@ -68,6 +70,12 @@ struct KeyboardRootView: View {
         case alternateCommitted(Character)
         case alternatePalette(Character)
         case swiping
+    }
+
+    private struct AppliedCorrection: Equatable {
+        let original: String
+        let replacement: String
+        let suffix: String
     }
 
     private var usesCompactMetrics: Bool { verticalSizeClass == .compact }
@@ -214,7 +222,6 @@ struct KeyboardRootView: View {
 			)
 
             VStack(spacing: verticalGap) {
-                characterRow(Array("1234567890"), width: characterWidth, fontSize: 18)
                 characterRow(activeRows[0], width: characterWidth)
                 characterRow(activeRows[1], width: characterWidth)
                     .padding(.horizontal, homeInset)
@@ -253,7 +260,7 @@ struct KeyboardRootView: View {
             }
             .padding(.horizontal, outerInset)
         }
-        .frame(height: 4 * keyHeight + 3 * verticalGap)
+        .frame(height: 3 * keyHeight + 2 * verticalGap)
         .coordinateSpace(name: Self.keySpace)
         .onPreferenceChange(KeyFramesKey.self) { keyFrames = $0 }
         .contentShape(Rectangle())
@@ -287,8 +294,7 @@ struct KeyboardRootView: View {
                 }
                 spaceKey
                 bottomKey(systemName: "return", width: returnWidth) {
-                    applyAutocorrectionIfNeeded()
-                    manualInsert("\n")
+                    insertDelimiter("\n")
                 }
             }
             .padding(.horizontal, outerInset)
@@ -816,9 +822,10 @@ struct KeyboardRootView: View {
                 ? String(character).uppercased()
                 : String(character)
             if ".,!?;:".contains(character) {
-                applyAutocorrectionIfNeeded()
+                insertDelimiter(value)
+            } else {
+                manualInsert(value)
             }
-            manualInsert(value)
             if layout == .letters, character.isLetter, shiftState == .once {
                 shiftState = .off
             }
@@ -911,11 +918,17 @@ struct KeyboardRootView: View {
 
     // MARK: - Text mutation
 
-    private func manualInsert(_ text: String, resetsSpaceTap: Bool = true) {
+    private func manualInsert(
+        _ text: String,
+        resetsSpaceTap: Bool = true,
+        clearsAutocorrection: Bool = true
+    ) {
         lastInsertedText = nil
+        if clearsAutocorrection { appliedCorrection = nil }
         if resetsSpaceTap { lastSpaceTapAt = nil }
 		proxyInsertText(text)
         refreshAutomaticShift()
+        scheduleCorrectionRefresh()
     }
 
 	private func proxyInsertText(_ text: String) {
@@ -934,24 +947,46 @@ struct KeyboardRootView: View {
     }
 
     @discardableResult
-    private func applyAutocorrectionIfNeeded() -> Bool {
+    private func applyAutocorrectionIfNeeded() -> AppliedCorrection? {
         guard let word = KeyboardEditingRules.autocorrectionWord(
             contextBefore: context().0,
             fieldKind: fieldKind(),
             autocorrectionEnabled: autocorrectionEnabled()
         ),
-              let suggestion = correctionForWord(word),
+              let suggestion = correctionsForWord(word).first,
+              KeyboardEditingRules.shouldAutomaticallyReplace(word, with: suggestion),
               let replacement = KeyboardEditingRules.replacement(
                 suggestion,
                 matchingCapitalizationOf: word
               ) else {
-            return false
+            return nil
         }
 
         for _ in word { proxyDeleteBackward() }
         proxyInsertText(replacement)
         lastInsertedText = nil
-        return true
+        correctionCandidates = []
+        return AppliedCorrection(
+            original: word,
+            replacement: replacement,
+            suffix: replacement
+        )
+    }
+
+    private func insertDelimiter(_ delimiter: String, resetsSpaceTap: Bool = true) {
+        let correction = applyAutocorrectionIfNeeded()
+        manualInsert(
+            delimiter,
+            resetsSpaceTap: resetsSpaceTap,
+            clearsAutocorrection: correction == nil
+        )
+        if let correction {
+            appliedCorrection = AppliedCorrection(
+                original: correction.original,
+                replacement: correction.replacement,
+                suffix: correction.replacement + delimiter
+            )
+        }
     }
 
     private func spaceTapped() {
@@ -967,23 +1002,30 @@ struct KeyboardRootView: View {
 			proxyDeleteBackward()
 			proxyInsertText(". ")
             lastInsertedText = nil
+            appliedCorrection = nil
             lastSpaceTapAt = nil
             refreshAutomaticShift()
+            scheduleCorrectionRefresh()
         } else {
-            applyAutocorrectionIfNeeded()
-            manualInsert(" ", resetsSpaceTap: false)
+            insertDelimiter(" ", resetsSpaceTap: false)
             lastSpaceTapAt = now
         }
     }
 
     private func manualDelete() {
         lastInsertedText = nil
+        appliedCorrection = nil
         lastSpaceTapAt = nil
 		proxyDeleteBackward()
         refreshAutomaticShift()
+        scheduleCorrectionRefresh()
     }
 
     private func synchronizeDocumentState() {
+        if let appliedCorrection,
+           context().0?.hasSuffix(appliedCorrection.suffix) != true {
+            self.appliedCorrection = nil
+        }
         let currentFieldKind = fieldKind()
         if observedFieldKind != currentFieldKind {
             let previousFieldKind = observedFieldKind
@@ -995,6 +1037,66 @@ struct KeyboardRootView: View {
             }
         }
         refreshAutomaticShift()
+        refreshCorrectionCandidates()
+    }
+
+    private func refreshCorrectionCandidates() {
+        guard appliedCorrection == nil,
+              let word = KeyboardEditingRules.autocorrectionWord(
+                contextBefore: context().0,
+                fieldKind: fieldKind(),
+                autocorrectionEnabled: autocorrectionEnabled()
+              ) else {
+            correctionCandidates = []
+            return
+        }
+        correctionCandidates = correctionsForWord(word).compactMap { suggestion in
+            KeyboardEditingRules.replacement(suggestion, matchingCapitalizationOf: word)
+        }
+    }
+
+    private func scheduleCorrectionRefresh() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(35))
+            refreshCorrectionCandidates()
+        }
+    }
+
+    private func chooseCorrection(_ suggestion: String) {
+        guard let word = KeyboardEditingRules.autocorrectionWord(
+            contextBefore: context().0,
+            fieldKind: fieldKind(),
+            autocorrectionEnabled: autocorrectionEnabled()
+        ),
+              let replacement = KeyboardEditingRules.replacement(
+                suggestion,
+                matchingCapitalizationOf: word
+              ) else { return }
+
+        for _ in word { proxyDeleteBackward() }
+        proxyInsertText(replacement)
+        correctionCandidates = []
+        appliedCorrection = AppliedCorrection(
+            original: word,
+            replacement: replacement,
+            suffix: replacement
+        )
+        KeyboardHaptics.keyDown()
+    }
+
+    private func undoAutocorrection() {
+        guard let appliedCorrection,
+              let before = context().0,
+              before.hasSuffix(appliedCorrection.suffix) else {
+            self.appliedCorrection = nil
+            return
+        }
+        for _ in appliedCorrection.suffix { proxyDeleteBackward() }
+        let delimiter = String(appliedCorrection.suffix.dropFirst(appliedCorrection.replacement.count))
+        proxyInsertText(appliedCorrection.original + delimiter)
+        self.appliedCorrection = nil
+        scheduleCorrectionRefresh()
+        KeyboardHaptics.keyDown()
     }
 
     private func refreshAutomaticShift() {
@@ -1087,28 +1189,50 @@ struct KeyboardRootView: View {
                 Spacer()
                 Button("Retry") { retryOrBeginDictation() }.font(.caption.bold())
             case .idle, .completed:
-                Image(systemName: state.sessionAlive ? "mic.badge.plus" : "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                Text(documentState.hasFullAccess
-                     ? (state.sessionAlive ? "Session live — instant dictation" : "On-device dictation")
-                     : "Full Access required")
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                if lastInsertedText != nil {
-                    Button { undoLastInsertion() } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                            .frame(width: 34, height: 34)
+                if let appliedCorrection {
+                    Button { undoAutocorrection() } label: {
+                        Label(appliedCorrection.original, systemImage: "arrow.uturn.backward")
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity)
                     }
-                    .accessibilityLabel("Undo last dictation")
-                }
-                Button { beginDictation() } label: {
-                    Label("Dictate", systemImage: "mic.fill")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .frame(height: 38)
-                        .background(Color.indigo.gradient, in: Capsule())
+                    .accessibilityLabel("Undo autocorrection to \(appliedCorrection.original)")
+                    compactDictationButton
+                } else if !correctionCandidates.isEmpty {
+                    ForEach(Array(correctionCandidates.prefix(3)), id: \.self) { suggestion in
+                        Button(suggestion) { chooseCorrection(suggestion) }
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity)
+                        if suggestion != correctionCandidates.prefix(3).last {
+                            Divider().frame(height: 22)
+                        }
+                    }
+                    compactDictationButton
+                } else {
+                    Image(systemName: state.sessionAlive ? "mic.badge.plus" : "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                    Text(documentState.hasFullAccess
+                         ? (state.sessionAlive ? "Session live — instant dictation" : "On-device dictation")
+                         : "Full Access required")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    if lastInsertedText != nil {
+                        Button { undoLastInsertion() } label: {
+                            Image(systemName: "arrow.uturn.backward")
+                                .frame(width: 34, height: 34)
+                        }
+                        .accessibilityLabel("Undo last dictation")
+                    }
+                    Button { beginDictation() } label: {
+                        Label("Dictate", systemImage: "mic.fill")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .frame(height: 38)
+                            .background(Color.indigo.gradient, in: Capsule())
+                    }
                 }
             }
         }
@@ -1118,12 +1242,25 @@ struct KeyboardRootView: View {
         .padding(.horizontal, outerInset)
     }
 
+    private var compactDictationButton: some View {
+        Button { beginDictation() } label: {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(Color.indigo.gradient, in: Circle())
+        }
+        .accessibilityLabel("Dictate")
+    }
+
     private func beginDictation() {
         guard documentState.hasFullAccess else {
             state.showFullAccessError()
             return
         }
         lastInsertedText = nil
+        appliedCorrection = nil
+        correctionCandidates = []
         let sessionWasAlive = state.sessionAlive
         guard state.beginStart() else { return }
         if !sessionWasAlive { openScribe() }

@@ -43,10 +43,9 @@ final class KeyboardInteractionRulesTests: XCTestCase {
         XCTAssertEqual(geometry.tenColumnKeyWidth(totalWidth: 440), 37.2, accuracy: 0.001)
         XCTAssertEqual(geometry.homeRowInset(totalWidth: 440), 21.6, accuracy: 0.001)
         XCTAssertEqual(geometry.controlToLetterGap(totalWidth: 440), 14.8, accuracy: 0.001)
-        XCTAssertEqual(geometry.numberRowPitch, 56)
         XCTAssertEqual(geometry.toolbarToKeyGap, 6)
-        XCTAssertEqual(geometry.contentHeight, 314)
-        XCTAssertEqual(geometry.extensionHeight, 319)
+        XCTAssertEqual(geometry.contentHeight, 258)
+        XCTAssertEqual(geometry.extensionHeight, 263)
     }
 
 	func testCompactGeometryMatchesCapturedLandscapeSystemGrid() {
@@ -54,10 +53,9 @@ final class KeyboardInteractionRulesTests: XCTestCase {
 		XCTAssertEqual(geometry.tenColumnKeyWidth(totalWidth: 724), 66.2, accuracy: 0.001)
 		XCTAssertEqual(geometry.homeRowInset(totalWidth: 724), 36.1, accuracy: 0.001)
 		XCTAssertEqual(geometry.controlToLetterGap(totalWidth: 724), 21.3, accuracy: 0.001)
-		XCTAssertEqual(geometry.numberRowPitch, 36)
 		XCTAssertEqual(geometry.toolbarToKeyGap, 5)
-		XCTAssertEqual(geometry.contentHeight, 208)
-		XCTAssertEqual(geometry.extensionHeight, 211)
+		XCTAssertEqual(geometry.contentHeight, 172)
+		XCTAssertEqual(geometry.extensionHeight, 175)
 	}
 
     func testCursorTranslationUsesStableCharacterSteps() {

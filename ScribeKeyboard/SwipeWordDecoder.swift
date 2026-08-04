@@ -54,7 +54,7 @@ final class SwipeWordDecoder {
         entriesByFirstLetter = buckets
     }
 
-    private static func loadBundledWords() -> [String] {
+    static func loadBundledWords() -> [String] {
         guard let url = Bundle.main.url(forResource: "SwipeWords", withExtension: "txt"),
               let contents = try? String(contentsOf: url, encoding: .utf8) else {
             return []

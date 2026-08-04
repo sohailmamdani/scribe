@@ -40,7 +40,7 @@ For the iOS app and keyboard:
 
 The `Scribe iOS` target includes a containing app and an embedded `ScribeKeyboard` extension. From any standard text field, switch to Scribe Keyboard and tap **Dictate**. The keyboard asks iOS to open Scribe, the containing app activates the microphone, and recording continues while you return to the original app. Scribe transcribes and polishes the recording locally and inserts the result at the cursor. On recent iOS versions, you may need to swipe back once after Scribe opens.
 
-The iOS app uses Argmax's compressed Whisper Large-v3 model for High Accuracy transcription. Existing installs can keep dictating with their cached Base model while Large-v3 downloads and prepares; Base also remains the CPU-only fallback when Core ML rejects a prediction. The keyboard follows the captured iOS key grid, adds a permanent number row, and exposes the small alternate shown on each key with a downward flick or press-and-hold.
+The iOS app uses Argmax's compressed Whisper Large-v3 model for High Accuracy transcription. Existing installs can keep dictating with their cached Base model while Large-v3 downloads and prepares; interrupted transfers resume from their partial cache, and Base remains the CPU-only fallback when Core ML rejects a prediction. The keyboard follows the captured iOS four-row key grid, keeps numbers behind `123` and downward-flick alternates, offers ranked correction candidates with one-tap undo, and supports press-and-hold alternates.
 
 To enable the keyboard:
 

@@ -850,42 +850,94 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		honorsCancellation: Bool = true
 	) async throws -> URL {
 		if honorsCancellation { try Task.checkCancellation() }
-		updateModelPreparationStatus(
-			profile == .highAccuracy
-				? "Installing High Accuracy model…"
-				: "Installing the on-device fallback…",
-			progress: 0,
-			publishToCurrentRequest: publishToCurrentRequest
-		)
-		let folder = try await WhisperKit.download(
-			variant: profile.downloadVariant,
-			downloadBase: modelDownloadBase,
-			from: ScribeModelPolicy.repository
-		) { [weak self] progress in
-			let fraction = progress.fractionCompleted
-			Task { @MainActor [weak self] in
-				guard let self else { return }
-				if let installationGeneration,
-				   self.qualityInstallGeneration != installationGeneration {
-					return
+		if profile == .highAccuracy { try verifyHighAccuracyStorage() }
+		let previousIdleTimerState = UIApplication.shared.isIdleTimerDisabled
+		if profile == .highAccuracy { UIApplication.shared.isIdleTimerDisabled = true }
+		defer {
+			if profile == .highAccuracy {
+				UIApplication.shared.isIdleTimerDisabled = previousIdleTimerState
+			}
+		}
+
+		let maximumAttempts = profile == .highAccuracy
+			? ScribeModelDownloadPolicy.maximumAttempts
+			: 1
+		var finalError: Error = DictationError.modelUnavailable
+
+		for attempt in 1...maximumAttempts {
+			if honorsCancellation { try Task.checkCancellation() }
+			let attemptLabel = attempt == 1 ? "" : " — resuming \(attempt)/\(maximumAttempts)"
+			updateModelPreparationStatus(
+				profile == .highAccuracy
+					? "Installing High Accuracy model\(attemptLabel)…"
+					: "Installing the on-device fallback…",
+				progress: 0,
+				publishToCurrentRequest: publishToCurrentRequest
+			)
+
+			do {
+				let folder = try await WhisperKit.download(
+					variant: profile.downloadVariant,
+					downloadBase: modelDownloadBase,
+					from: ScribeModelPolicy.repository
+				) { [weak self] progress in
+					let fraction = progress.fractionCompleted
+					Task { @MainActor [weak self] in
+						guard let self else { return }
+						if let installationGeneration,
+						   self.qualityInstallGeneration != installationGeneration {
+							return
+						}
+						let percent = Int((fraction * 100).rounded())
+						self.updateModelPreparationStatus(
+							profile == .highAccuracy
+								? "Installing High Accuracy model… \(percent)%"
+								: "Installing the on-device fallback… \(percent)%",
+							progress: fraction,
+							publishToCurrentRequest: publishToCurrentRequest
+						)
+					}
 				}
-				let percent = Int((fraction * 100).rounded())
-				self.updateModelPreparationStatus(
-					profile == .highAccuracy
-						? "Installing High Accuracy model… \(percent)%"
-						: "Installing the on-device fallback… \(percent)%",
-					progress: fraction,
+				if honorsCancellation { try Task.checkCancellation() }
+				if let installationGeneration,
+				   qualityInstallGeneration != installationGeneration {
+					throw CancellationError()
+				}
+				try markModelDownloaded(profile: profile, folder: folder)
+				return folder
+			} catch is CancellationError {
+				throw CancellationError()
+			} catch {
+				finalError = error
+				guard attempt < maximumAttempts,
+				      ScribeModelDownloadPolicy.isRetryable(error as NSError) else {
+					throw error
+				}
+				logger.warning("High Accuracy download attempt \(attempt) was interrupted; resuming the partial cache: \(error.localizedDescription, privacy: .public)")
+				updateModelPreparationStatus(
+					"High Accuracy was interrupted — resuming partial download…",
+					progress: nil,
 					publishToCurrentRequest: publishToCurrentRequest
+				)
+				try await Task.sleep(
+					for: .seconds(ScribeModelDownloadPolicy.retryDelay(afterFailedAttempt: attempt))
 				)
 			}
 		}
-		if honorsCancellation { try Task.checkCancellation() }
-		if let installationGeneration,
-		   qualityInstallGeneration != installationGeneration {
-			throw CancellationError()
+		throw finalError
+	}
+
+	private func verifyHighAccuracyStorage() throws {
+		guard let values = try? modelDownloadBase.resourceValues(forKeys: [
+			.volumeAvailableCapacityForImportantUsageKey,
+			.volumeAvailableCapacityKey,
+		]) else { return }
+		let capacity = values.volumeAvailableCapacityForImportantUsage
+			?? values.volumeAvailableCapacity.map(Int64.init)
+		if let capacity,
+		   capacity < ScribeModelDownloadPolicy.minimumHighAccuracyCapacity {
+			throw DictationError.insufficientModelStorage
 		}
-		try markModelDownloaded(profile: profile, folder: folder)
-		return folder
 	}
 
 	private func cachedModelFolder(for profile: ScribeModelProfile) -> URL? {
@@ -1013,7 +1065,14 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			} catch {
 				self.logger.warning("High Accuracy model installation paused: \(error.localizedDescription, privacy: .public)")
 				self.modelInstallationProgress = nil
-				self.modelInstallationMessage = "High Accuracy download paused — tap Try High Accuracy again"
+				if let dictationError = error as? DictationError,
+				   case .insufficientModelStorage = dictationError {
+					self.modelInstallationMessage = "High Accuracy needs about 1.5 GB free. Free some storage, then try again."
+				} else {
+					self.modelInstallationMessage = ScribeModelDownloadPolicy.installationFailureMessage(
+						for: error as NSError
+					)
+				}
 			}
 		}
 	}
@@ -1054,6 +1113,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 	func retryHighAccuracyModel() {
 		UserDefaults.standard.removeObject(forKey: compatibilityPreferenceKey)
+		modelInstallationMessage = "Resuming the High Accuracy download…"
 		let generation = UUID()
 		qualityRetryGeneration = generation
 		let installTask = qualityInstallTask
@@ -1308,6 +1368,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 private enum DictationError: LocalizedError {
     case recordingDidNotStart
     case modelUnavailable
+    case insufficientModelStorage
     case noSpeechDetected
 
     var errorDescription: String? {
@@ -1316,6 +1377,8 @@ private enum DictationError: LocalizedError {
             "Scribe couldn’t start recording."
         case .modelUnavailable:
             "The on-device transcription model isn’t ready."
+        case .insufficientModelStorage:
+            "High Accuracy needs about 1.5 GB of free storage."
         case .noSpeechDetected:
             "Scribe didn’t hear any speech. Please try again."
         }

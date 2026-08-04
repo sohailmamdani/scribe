@@ -43,4 +43,30 @@ final class TranscriptionModelPolicyTests: XCTestCase {
             .highAccuracy
         )
     }
+
+    func testHighAccuracyDownloadsRetryButCancellationDoesNot() {
+        XCTAssertEqual(ScribeModelDownloadPolicy.maximumAttempts, 3)
+        XCTAssertTrue(
+            ScribeModelDownloadPolicy.isRetryable(
+                NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+            )
+        )
+        XCTAssertFalse(
+            ScribeModelDownloadPolicy.isRetryable(
+                NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+            )
+        )
+    }
+
+    func testDownloadFailureMessagesExplainRecovery() {
+        let networkMessage = ScribeModelDownloadPolicy.installationFailureMessage(
+            for: NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)
+        )
+        XCTAssertTrue(networkMessage.contains("download will resume"))
+
+        let storageMessage = ScribeModelDownloadPolicy.installationFailureMessage(
+            for: NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError)
+        )
+        XCTAssertTrue(storageMessage.contains("1.5 GB"))
+    }
 }
