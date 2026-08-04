@@ -19,7 +19,9 @@ struct KeyboardRootView: View {
     let fieldKind: () -> KeyboardFieldKind
     let capitalizationMode: () -> KeyboardCapitalizationMode
     let autocorrectionEnabled: () -> Bool
-    let correctionsForWord: (String) -> [String]
+    let correctionsForWord: (String, String?) -> [KeyboardCorrection]
+    let recordAcceptedCorrection: (String, String) -> Void
+    let recordRejectedCorrection: (String, String) -> Void
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
 
     @Environment(\.openURL) private var openURL
@@ -32,7 +34,7 @@ struct KeyboardRootView: View {
     @State private var lastSpaceTapAt: Date?
     @State private var lastShiftTapAt: Date?
     @State private var observedFieldKind: KeyboardFieldKind?
-	@State private var correctionCandidates: [String] = []
+	@State private var correctionCandidates: [KeyboardCorrection] = []
 	@State private var appliedCorrection: AppliedCorrection?
 	@State private var localMutationGraceDeadline = Date.distantPast
 
@@ -953,10 +955,9 @@ struct KeyboardRootView: View {
             fieldKind: fieldKind(),
             autocorrectionEnabled: autocorrectionEnabled()
         ),
-              let suggestion = correctionsForWord(word).first,
-              KeyboardEditingRules.shouldAutomaticallyReplace(word, with: suggestion),
+              let suggestion = correctionsForWord(word, context().0).first(where: \.automaticallyReplaces),
               let replacement = KeyboardEditingRules.replacement(
-                suggestion,
+                suggestion.text,
                 matchingCapitalizationOf: word
               ) else {
             return nil
@@ -981,6 +982,7 @@ struct KeyboardRootView: View {
             clearsAutocorrection: correction == nil
         )
         if let correction {
+            recordAcceptedCorrection(correction.original, correction.replacement)
             appliedCorrection = AppliedCorrection(
                 original: correction.original,
                 replacement: correction.replacement,
@@ -1050,8 +1052,15 @@ struct KeyboardRootView: View {
             correctionCandidates = []
             return
         }
-        correctionCandidates = correctionsForWord(word).compactMap { suggestion in
-            KeyboardEditingRules.replacement(suggestion, matchingCapitalizationOf: word)
+        correctionCandidates = correctionsForWord(word, context().0).compactMap { suggestion in
+            guard let replacement = KeyboardEditingRules.replacement(
+                suggestion.text,
+                matchingCapitalizationOf: word
+            ) else { return nil }
+            return KeyboardCorrection(
+                text: replacement,
+                automaticallyReplaces: suggestion.automaticallyReplaces
+            )
         }
     }
 
@@ -1062,14 +1071,14 @@ struct KeyboardRootView: View {
         }
     }
 
-    private func chooseCorrection(_ suggestion: String) {
+    private func chooseCorrection(_ suggestion: KeyboardCorrection) {
         guard let word = KeyboardEditingRules.autocorrectionWord(
             contextBefore: context().0,
             fieldKind: fieldKind(),
             autocorrectionEnabled: autocorrectionEnabled()
         ),
               let replacement = KeyboardEditingRules.replacement(
-                suggestion,
+                suggestion.text,
                 matchingCapitalizationOf: word
               ) else { return }
 
@@ -1081,6 +1090,7 @@ struct KeyboardRootView: View {
             replacement: replacement,
             suffix: replacement
         )
+        recordAcceptedCorrection(word, replacement)
         KeyboardHaptics.keyDown()
     }
 
@@ -1094,6 +1104,10 @@ struct KeyboardRootView: View {
         for _ in appliedCorrection.suffix { proxyDeleteBackward() }
         let delimiter = String(appliedCorrection.suffix.dropFirst(appliedCorrection.replacement.count))
         proxyInsertText(appliedCorrection.original + delimiter)
+        recordRejectedCorrection(
+            appliedCorrection.original,
+            appliedCorrection.replacement
+        )
         self.appliedCorrection = nil
         scheduleCorrectionRefresh()
         KeyboardHaptics.keyDown()
@@ -1200,7 +1214,7 @@ struct KeyboardRootView: View {
                     compactDictationButton
                 } else if !correctionCandidates.isEmpty {
                     ForEach(Array(correctionCandidates.prefix(3)), id: \.self) { suggestion in
-                        Button(suggestion) { chooseCorrection(suggestion) }
+                        Button(suggestion.text) { chooseCorrection(suggestion) }
                             .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                             .frame(maxWidth: .infinity)

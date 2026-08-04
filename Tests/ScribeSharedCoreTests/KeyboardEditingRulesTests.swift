@@ -94,6 +94,24 @@ final class KeyboardEditingRulesTests: XCTestCase {
         )
     }
 
+    func testAutocorrectionExtractsThePreviousContextWord() {
+        XCTAssertEqual(
+            KeyboardEditingRules.wordBeforeAutocorrectionWord(
+                contextBefore: "Please type teh"
+            ),
+            "type"
+        )
+        XCTAssertEqual(
+            KeyboardEditingRules.wordBeforeAutocorrectionWord(
+                contextBefore: "Thank-you, teh"
+            ),
+            "you"
+        )
+        XCTAssertNil(
+            KeyboardEditingRules.wordBeforeAutocorrectionWord(contextBefore: "teh")
+        )
+    }
+
     func testAutocorrectionRespectsHostTraitsAndFieldKind() {
         XCTAssertNil(
             KeyboardEditingRules.autocorrectionWord(

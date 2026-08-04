@@ -45,7 +45,7 @@ final class TranscriptionModelPolicyTests: XCTestCase {
     }
 
     func testHighAccuracyDownloadsRetryButCancellationDoesNot() {
-        XCTAssertEqual(ScribeModelDownloadPolicy.maximumAttempts, 3)
+        XCTAssertEqual(ScribeModelDownloadPolicy.maximumAttempts, 4)
         XCTAssertTrue(
             ScribeModelDownloadPolicy.isRetryable(
                 NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
@@ -55,6 +55,22 @@ final class TranscriptionModelPolicyTests: XCTestCase {
             ScribeModelDownloadPolicy.isRetryable(
                 NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
             )
+        )
+    }
+
+    func testHighAccuracyManifestPinsLargeComponentWeights() {
+        XCTAssertEqual(
+            ScribeModelPolicy.primary.componentRequirements,
+            [
+                .init(name: "MelSpectrogram", expectedWeightBytes: 373_376),
+                .init(name: "AudioEncoder", expectedWeightBytes: 421_968_768),
+                .init(name: "TextDecoder", expectedWeightBytes: 203_199_860),
+            ]
+        )
+        XCTAssertTrue(
+            ScribeModelPolicy.fallback.componentRequirements.allSatisfy {
+                $0.expectedWeightBytes == nil
+            }
         )
     }
 

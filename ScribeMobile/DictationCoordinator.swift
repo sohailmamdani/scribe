@@ -866,6 +866,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 		for attempt in 1...maximumAttempts {
 			if honorsCancellation { try Task.checkCancellation() }
+			try repairInvalidModelComponents(for: profile)
 			let attemptLabel = attempt == 1 ? "" : " — resuming \(attempt)/\(maximumAttempts)"
 			updateModelPreparationStatus(
 				profile == .highAccuracy
@@ -876,7 +877,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			)
 
 			do {
-				let folder = try await WhisperKit.download(
+				let returnedFolder = try await WhisperKit.download(
 					variant: profile.downloadVariant,
 					downloadBase: modelDownloadBase,
 					from: ScribeModelPolicy.repository
@@ -902,6 +903,14 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 				if let installationGeneration,
 				   qualityInstallGeneration != installationGeneration {
 					throw CancellationError()
+				}
+				let folder = modelFolder(for: profile)
+				if returnedFolder.standardizedFileURL != folder.standardizedFileURL {
+					logger.warning("WhisperKit returned an unexpected model cache path; validating the canonical cache instead")
+				}
+				let invalidComponents = invalidModelComponents(in: folder, profile: profile)
+				guard invalidComponents.isEmpty else {
+					throw DictationError.incompleteModelDownload(invalidComponents)
 				}
 				try markModelDownloaded(profile: profile, folder: folder)
 				return folder
@@ -942,7 +951,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 	private func cachedModelFolder(for profile: ScribeModelProfile) -> URL? {
 		let folder = modelFolder(for: profile)
-		return hasCompleteModelComponents(in: folder)
+		return hasCompleteModelComponents(in: folder, profile: profile)
 			&& FileManager.default.fileExists(atPath: readyMarker(in: folder).path)
 			? folder
 			: nil
@@ -950,7 +959,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 	private func downloadedModelFolder(for profile: ScribeModelProfile) -> URL? {
 		let folder = modelFolder(for: profile)
-		return hasCompleteModelComponents(in: folder)
+		return hasCompleteModelComponents(in: folder, profile: profile)
 			&& FileManager.default.fileExists(atPath: downloadedMarker(in: folder).path)
 			? folder
 			: nil
@@ -965,7 +974,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	private func legacyCompatibilityModelFolder(for profile: ScribeModelProfile) -> URL? {
 		guard profile == .compatibility else { return nil }
 		let folder = modelFolder(for: profile)
-		return hasCompleteModelComponents(in: folder) ? folder : nil
+		return hasCompleteModelComponents(in: folder, profile: profile) ? folder : nil
 	}
 
 	private func modelFolder(for profile: ScribeModelProfile) -> URL {
@@ -985,8 +994,10 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 	private func markModelDownloaded(profile: ScribeModelProfile, folder: URL) throws {
 		guard folder.standardizedFileURL == modelFolder(for: profile).standardizedFileURL,
-		      hasCompleteModelComponents(in: folder) else {
-			throw DictationError.modelUnavailable
+		      hasCompleteModelComponents(in: folder, profile: profile) else {
+			throw DictationError.incompleteModelDownload(
+				invalidModelComponents(in: folder, profile: profile)
+			)
 		}
 		try Data("downloaded\n".utf8).write(to: downloadedMarker(in: folder), options: .atomic)
 	}
@@ -1001,24 +1012,58 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		try? FileManager.default.removeItem(at: readyMarker(in: folder))
 	}
 
-	private func hasCompleteModelComponents(in folder: URL) -> Bool {
-		guard FileManager.default.fileExists(atPath: folder.path),
-		      let enumerator = FileManager.default.enumerator(
-			at: folder,
-			includingPropertiesForKeys: nil,
-			options: [.skipsHiddenFiles]
-		) else { return false }
+	private func hasCompleteModelComponents(
+		in folder: URL,
+		profile: ScribeModelProfile
+	) -> Bool {
+		invalidModelComponents(in: folder, profile: profile).isEmpty
+	}
 
-		var components = Set<String>()
-		for case let url as URL in enumerator {
-			for required in ["MelSpectrogram", "AudioEncoder", "TextDecoder"]
-			where url.lastPathComponent.hasPrefix(required)
-			    && ["mlmodelc", "mlpackage"].contains(url.pathExtension) {
-				components.insert(required)
-				enumerator.skipDescendants()
+	private func invalidModelComponents(
+		in folder: URL,
+		profile: ScribeModelProfile
+	) -> [String] {
+		profile.componentRequirements.compactMap { requirement in
+			let component = folder.appendingPathComponent(
+				"\(requirement.name).mlmodelc",
+				isDirectory: true
+			)
+			let requiredFiles = [
+				component.appendingPathComponent("coremldata.bin"),
+				component.appendingPathComponent("model.mil"),
+				component.appendingPathComponent("weights/weight.bin"),
+			]
+			guard requiredFiles.allSatisfy({ fileSize(at: $0) > 0 }) else {
+				return requirement.name
 			}
+			if let expectedWeightBytes = requirement.expectedWeightBytes,
+			   fileSize(at: requiredFiles[2]) != expectedWeightBytes {
+				return requirement.name
+			}
+			return nil
 		}
-		return components.count == 3
+	}
+
+	private func fileSize(at url: URL) -> Int64 {
+		let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+		return Int64(values?.fileSize ?? 0)
+	}
+
+	private func repairInvalidModelComponents(for profile: ScribeModelProfile) throws {
+		let folder = modelFolder(for: profile)
+		let invalidComponents = invalidModelComponents(in: folder, profile: profile)
+		guard !invalidComponents.isEmpty else { return }
+
+		invalidateModelMarkers(in: folder)
+		for componentName in invalidComponents {
+			let component = folder.appendingPathComponent(
+				"\(componentName).mlmodelc",
+				isDirectory: true
+			)
+			guard FileManager.default.fileExists(atPath: component.path) else { continue }
+			logger.warning("Removing incomplete \(componentName, privacy: .public) cache component before resume")
+			try FileManager.default.removeItem(at: component)
+		}
 	}
 
 	private func prepareModelCacheDirectory() throws {
@@ -1065,9 +1110,8 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			} catch {
 				self.logger.warning("High Accuracy model installation paused: \(error.localizedDescription, privacy: .public)")
 				self.modelInstallationProgress = nil
-				if let dictationError = error as? DictationError,
-				   case .insufficientModelStorage = dictationError {
-					self.modelInstallationMessage = "High Accuracy needs about 1.5 GB free. Free some storage, then try again."
+				if let dictationError = error as? DictationError {
+					self.modelInstallationMessage = dictationError.modelInstallationMessage
 				} else {
 					self.modelInstallationMessage = ScribeModelDownloadPolicy.installationFailureMessage(
 						for: error as NSError
@@ -1369,6 +1413,7 @@ private enum DictationError: LocalizedError {
     case recordingDidNotStart
     case modelUnavailable
     case insufficientModelStorage
+	case incompleteModelDownload([String])
     case noSpeechDetected
 
     var errorDescription: String? {
@@ -1379,8 +1424,21 @@ private enum DictationError: LocalizedError {
             "The on-device transcription model isn’t ready."
         case .insufficientModelStorage:
             "High Accuracy needs about 1.5 GB of free storage."
+		case .incompleteModelDownload(let components):
+			"The High Accuracy download is incomplete: \(components.joined(separator: ", "))."
         case .noSpeechDetected:
             "Scribe didn’t hear any speech. Please try again."
         }
     }
+
+	var modelInstallationMessage: String {
+		switch self {
+		case .insufficientModelStorage:
+			"High Accuracy needs about 1.5 GB free. Free some storage, then try again."
+		case .incompleteModelDownload:
+			"High Accuracy found an incomplete cache. Tap Try High Accuracy again — Scribe will repair and resume it."
+		case .modelUnavailable, .recordingDidNotStart, .noSpeechDetected:
+			errorDescription ?? "High Accuracy couldn’t finish. Tap Try High Accuracy again."
+		}
+	}
 }

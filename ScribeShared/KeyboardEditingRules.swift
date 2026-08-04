@@ -102,6 +102,23 @@ enum KeyboardEditingRules {
         return word
     }
 
+    static func wordBeforeAutocorrectionWord(contextBefore: String?) -> String? {
+        guard var remaining = contextBefore, !remaining.isEmpty else { return nil }
+        while let last = remaining.last,
+              last.isLetter || last == "'" || last == "’" {
+            remaining.removeLast()
+        }
+        while let last = remaining.last, !last.isLetter {
+            remaining.removeLast()
+        }
+        let word = String(
+            remaining.reversed().prefix { character in
+                character.isLetter || character == "'" || character == "’"
+            }.reversed()
+        )
+        return word.isEmpty ? nil : word
+    }
+
     static func replacement(_ suggestion: String, matchingCapitalizationOf original: String) -> String? {
         let trimmed = suggestion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,

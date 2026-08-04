@@ -26,6 +26,33 @@ enum ScribeModelProfile: String, Equatable, Sendable {
     }
 
     var usesCPUOnly: Bool { self == .compatibility }
+
+    var componentRequirements: [ScribeModelComponentRequirement] {
+        switch self {
+        case .compatibility:
+            [
+                .init(name: "MelSpectrogram"),
+                .init(name: "AudioEncoder"),
+                .init(name: "TextDecoder"),
+            ]
+        case .highAccuracy:
+            [
+                .init(name: "MelSpectrogram", expectedWeightBytes: 373_376),
+                .init(name: "AudioEncoder", expectedWeightBytes: 421_968_768),
+                .init(name: "TextDecoder", expectedWeightBytes: 203_199_860),
+            ]
+        }
+    }
+}
+
+struct ScribeModelComponentRequirement: Equatable, Sendable {
+    let name: String
+    let expectedWeightBytes: Int64?
+
+    init(name: String, expectedWeightBytes: Int64? = nil) {
+        self.name = name
+        self.expectedWeightBytes = expectedWeightBytes
+    }
 }
 
 enum ScribeModelPolicy {
@@ -49,13 +76,14 @@ enum ScribeModelPolicy {
 }
 
 enum ScribeModelDownloadPolicy {
-    static let maximumAttempts = 3
+    static let maximumAttempts = 4
     static let minimumHighAccuracyCapacity: Int64 = 1_500_000_000
 
     static func retryDelay(afterFailedAttempt attempt: Int) -> TimeInterval {
         switch attempt {
         case ...1: 1
-        default: 3
+        case 2: 3
+        default: 7
         }
     }
 
@@ -80,7 +108,7 @@ enum ScribeModelDownloadPolicy {
         if errors.contains(where: { $0.domain == NSURLErrorDomain }) {
             return "High Accuracy was interrupted. Keep Scribe open on a stable connection, then tap Try High Accuracy again — the download will resume."
         }
-        return "High Accuracy couldn’t finish (\(error.domain) \(error.code)). Tap Try High Accuracy again — the download will resume."
+        return "High Accuracy couldn’t finish. Tap Try High Accuracy again — Scribe will repair and resume the download."
     }
 
     private static func errorChain(startingAt error: NSError) -> [NSError] {

@@ -53,8 +53,20 @@ final class KeyboardViewController: UIInputViewController {
             autocorrectionEnabled: { [weak self] in
                 self?.textDocumentProxy.autocorrectionType != .no
             },
-            correctionsForWord: { [weak self] word in
-                self?.corrections(for: word) ?? []
+            correctionsForWord: { [weak self] word, contextBefore in
+                self?.corrections(for: word, contextBefore: contextBefore) ?? []
+            },
+            recordAcceptedCorrection: { [weak self] original, replacement in
+                self?.autocorrectionEngine.recordAccepted(
+                    original: original,
+                    replacement: replacement
+                )
+            },
+            recordRejectedCorrection: { [weak self] original, replacement in
+                self?.autocorrectionEngine.recordRejected(
+                    original: original,
+                    replacement: replacement
+                )
             },
             openContainingApp: { [weak self] url, completion in
                 guard let self else {
@@ -142,9 +154,16 @@ final class KeyboardViewController: UIInputViewController {
         extensionContext.open(url, completionHandler: completion)
     }
 
-    private func corrections(for word: String) -> [String] {
+    private func corrections(
+        for word: String,
+        contextBefore: String?
+    ) -> [KeyboardCorrection] {
         let language = textDocumentProxy.documentInputMode?.primaryLanguage ?? "en-US"
-        return autocorrectionEngine.corrections(for: word, language: language)
+        return autocorrectionEngine.corrections(
+            for: word,
+            contextBefore: contextBefore,
+            language: language
+        )
     }
 
     private static func fieldKind(for keyboardType: UIKeyboardType) -> KeyboardFieldKind {
