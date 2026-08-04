@@ -29,6 +29,7 @@ struct KeyboardRootView: View {
     @State private var lastSpaceTapAt: Date?
     @State private var lastShiftTapAt: Date?
     @State private var observedFieldKind: KeyboardFieldKind?
+	@State private var localMutationGraceDeadline = Date.distantPast
 
     // Unified touch handling over the key area: frames are collected per key
     // so one drag gesture can drive taps, hold-to-repeat delete, and swipes.
@@ -36,7 +37,8 @@ struct KeyboardRootView: View {
     @State private var pressedKey: KeyID?
     @State private var touchStart: CGPoint?
     @State private var startKey: KeyID?
-    @State private var isSwiping = false
+    @State private var touchMode: TouchMode = .idle
+    @State private var alternateHoldTask: Task<Void, Never>?
     @State private var swipePoints: [CGPoint] = []
     @State private var swipeKeys: [Character] = []
 
@@ -48,40 +50,41 @@ struct KeyboardRootView: View {
         case symbols
     }
 
+    private enum TouchMode: Equatable {
+        case idle
+        case pressed
+        case control
+        case deleting
+        case alternatePreview(Character)
+        case alternateCommitted(Character)
+        case alternatePalette(Character)
+        case swiping
+    }
+
     private var usesCompactMetrics: Bool { verticalSizeClass == .compact }
-    private var keyGap: CGFloat { usesCompactMetrics ? 4 : 7 }
-    private var letterKeyHeight: CGFloat { usesCompactMetrics ? 32 : 40 }
-    private var numberKeyHeight: CGFloat { usesCompactMetrics ? 28 : 34 }
-    private var bottomKeyHeight: CGFloat { usesCompactMetrics ? 32 : 40 }
-    private var dictationBarHeight: CGFloat { usesCompactMetrics ? 38 : 46 }
+    private var geometry: KeyboardGeometryRules {
+        usesCompactMetrics ? .compact : .portrait
+    }
+    private var horizontalGap: CGFloat { geometry.horizontalGap }
+    private var verticalGap: CGFloat { geometry.verticalGap }
+    private var keyHeight: CGFloat { geometry.keyHeight }
+    private var outerInset: CGFloat { geometry.outerInset }
+    private var dictationBarHeight: CGFloat { geometry.toolbarHeight }
 
     var body: some View {
         Group {
             if state.phase == .recording || state.phase == .transcribing {
                 listeningPanel
             } else {
-                VStack(spacing: keyGap) {
+                VStack(spacing: 0) {
                     dictationBar
-                    keyArea
-                    HStack(spacing: keyGap) {
-                        if documentState.needsInputModeSwitchKey {
-                            bottomKey(systemName: "globe", width: 44) { advanceInputMode() }
-                        }
-                        bottomKey(title: layout == .letters ? "123" : "ABC", width: 48) {
-                            layout = layout == .letters ? .numbers : .letters
-                            if layout == .letters { refreshAutomaticShift() }
-                        }
-                        bottomKey(title: "space", width: nil) { spaceTapped() }
-                        bottomKey(systemName: "return", width: 52) {
-                            manualInsert("\n")
-                        }
+                    VStack(spacing: verticalGap) {
+                        keyArea
+                        bottomRow
                     }
                 }
             }
         }
-        .padding(.horizontal, 5)
-        .padding(.top, usesCompactMetrics ? 3 : 5)
-        .padding(.bottom, usesCompactMetrics ? 2 : 4)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(.systemGray5))
         .onAppear {
@@ -93,7 +96,7 @@ struct KeyboardRootView: View {
                     contextBefore: surrounding.0,
                     contextAfter: surrounding.1
                 )
-                insertText(insertion)
+				proxyInsertText(insertion)
                 lastInsertedText = insertion
                 refreshAutomaticShift()
             }
@@ -102,7 +105,13 @@ struct KeyboardRootView: View {
             synchronizeDocumentState()
         }
         .onChange(of: documentState.selectionRevision) { _, _ in
-            lastSpaceTapAt = nil
+			// UITextDocumentProxy edits move the caret too. Do not interpret those
+			// callbacks as an external selection change: doing so cancels delete
+			// repeat and erases the first-space timestamp before a double-space.
+			if Date() > localMutationGraceDeadline {
+				lastSpaceTapAt = nil
+				cancelActiveTouch()
+			}
             synchronizeDocumentState()
         }
         .onDisappear {
@@ -178,35 +187,60 @@ struct KeyboardRootView: View {
     // MARK: - Key area
 
     private var keyArea: some View {
-        VStack(spacing: keyGap) {
-            characterRow(Array("1234567890"), keyHeight: numberKeyHeight, fontSize: 17)
-            characterRow(activeRows[0], keyHeight: letterKeyHeight)
-            characterRow(activeRows[1], keyHeight: letterKeyHeight)
-                .padding(.horizontal, 14)
-            HStack(spacing: keyGap) {
-                if layout == .letters {
-                    keyCap(
-                        id: .shift,
-                        width: 44,
-                        height: letterKeyHeight,
-                        emphasized: shiftState.usesUppercase
-                    ) {
-                        Image(systemName: shiftState == .locked ? "capslock.fill" : "shift.fill")
-                            .font(.system(size: 17, weight: .medium))
-                    }
-                } else {
-                    keyCap(id: .layoutToggle, width: 44, height: letterKeyHeight) {
-                        Text(layout == .numbers ? "#+=" : "123")
-                            .font(.system(size: 15))
-                    }
-                }
-                characterRow(activeRows[2], keyHeight: letterKeyHeight)
-                keyCap(id: .delete, width: 44, height: letterKeyHeight) {
-                    Image(systemName: "delete.left.fill")
-                        .font(.system(size: 17, weight: .medium))
-                }
+        GeometryReader { proxy in
+            let totalWidth = Double(proxy.size.width)
+            let characterWidth = CGFloat(geometry.tenColumnKeyWidth(totalWidth: totalWidth))
+            let homeInset = CGFloat(geometry.homeRowInset(totalWidth: totalWidth))
+            let controlGap = CGFloat(geometry.controlToLetterGap(totalWidth: totalWidth))
+			let thirdRowCharacters = activeRows[2]
+			let fittedThirdRowWidth = CGFloat(
+				geometry.fittedControlRowKeyWidth(
+					totalWidth: totalWidth,
+					characterCount: thirdRowCharacters.count
+				)
+			)
+
+            VStack(spacing: verticalGap) {
+                characterRow(Array("1234567890"), width: characterWidth, fontSize: 18)
+                characterRow(activeRows[0], width: characterWidth)
+                characterRow(activeRows[1], width: characterWidth)
+                    .padding(.horizontal, homeInset)
+				if layout == .letters {
+					HStack(spacing: 0) {
+						keyCap(
+							id: .shift,
+							width: geometry.controlWidth,
+							height: keyHeight,
+							emphasized: shiftState.usesUppercase
+						) {
+							Image(systemName: shiftState == .locked ? "capslock.fill" : "shift.fill")
+								.font(.system(size: 18, weight: .medium))
+						}
+						Spacer().frame(width: controlGap)
+						characterRow(thirdRowCharacters, width: characterWidth)
+						Spacer().frame(width: controlGap)
+						keyCap(id: .delete, width: geometry.controlWidth, height: keyHeight) {
+							Image(systemName: "delete.left.fill")
+								.font(.system(size: 18, weight: .medium))
+						}
+					}
+				} else {
+					HStack(spacing: horizontalGap) {
+						keyCap(id: .layoutToggle, width: geometry.controlWidth, height: keyHeight) {
+							Text(layout == .numbers ? "#+=" : "123")
+								.font(.system(size: 15))
+						}
+						characterRow(thirdRowCharacters, width: fittedThirdRowWidth)
+						keyCap(id: .delete, width: geometry.controlWidth, height: keyHeight) {
+							Image(systemName: "delete.left.fill")
+								.font(.system(size: 18, weight: .medium))
+						}
+					}
+				}
             }
+            .padding(.horizontal, outerInset)
         }
+        .frame(height: 4 * keyHeight + 3 * verticalGap)
         .coordinateSpace(name: Self.keySpace)
         .onPreferenceChange(KeyFramesKey.self) { keyFrames = $0 }
         .contentShape(Rectangle())
@@ -217,9 +251,35 @@ struct KeyboardRootView: View {
                     Color.indigo.opacity(0.55),
                     style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round)
                 )
-                .opacity(isSwiping ? 1 : 0)
+                .opacity(touchMode == .swiping ? 1 : 0)
                 .allowsHitTesting(false)
         }
+    }
+
+    private var bottomRow: some View {
+        GeometryReader { proxy in
+            let availableWidth = proxy.size.width - 2 * outerInset
+            let standardControlWidth = min(102, max(78, availableWidth * 0.24))
+            let modeWidth = documentState.needsInputModeSwitchKey ? CGFloat(72) : standardControlWidth
+            let returnWidth = documentState.needsInputModeSwitchKey ? CGFloat(78) : standardControlWidth
+
+            HStack(spacing: horizontalGap) {
+                if documentState.needsInputModeSwitchKey {
+                    bottomKey(systemName: "globe", width: 45) { advanceInputMode() }
+                }
+                bottomKey(title: layout == .letters ? "123" : "ABC", width: modeWidth) {
+                    cancelActiveTouch()
+                    layout = layout == .letters ? .numbers : .letters
+                    if layout == .letters { refreshAutomaticShift() }
+                }
+                bottomKey(title: "space", width: nil) { spaceTapped() }
+                bottomKey(systemName: "return", width: returnWidth) {
+                    manualInsert("\n")
+                }
+            }
+            .padding(.horizontal, outerInset)
+        }
+        .frame(height: keyHeight)
     }
 
     private var activeRows: [[Character]] {
@@ -235,40 +295,55 @@ struct KeyboardRootView: View {
 
     private func characterRow(
         _ characters: [Character],
-        keyHeight: CGFloat = 40,
-        fontSize: CGFloat = 21
+        width: CGFloat,
+        fontSize: CGFloat = 22
     ) -> some View {
-        HStack(spacing: keyGap) {
+        HStack(spacing: horizontalGap) {
             ForEach(characters, id: \.self) { character in
                 let display = layout == .letters && shiftState.usesUppercase && character.isLetter
                     ? String(character).uppercased()
                     : String(character)
+                let alternate = alternateSymbol(for: character)
+                let showsAlternate = isPreviewingAlternate(for: character)
                 keyCap(
                     id: .character(character),
-                    width: nil,
+                    width: width,
                     height: keyHeight,
-                    isCharacterKey: true
+                    isCharacterKey: true,
+                    alternate: alternate
                 ) {
-                    Text(display)
-                        .font(.system(size: fontSize))
+                    ZStack(alignment: .topLeading) {
+                        Text(showsAlternate ? alternate.map(String.init) ?? display : display)
+                            .font(.system(size: fontSize))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        if let alternate {
+                            Text(showsAlternate ? display : String(alternate))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 5)
+                                .padding(.top, 3)
+                        }
+                    }
                 }
             }
         }
     }
 
+    @ViewBuilder
     private func keyCap<Label: View>(
         id: KeyID,
         width: CGFloat?,
         height: CGFloat = 40,
         emphasized: Bool = false,
         isCharacterKey: Bool = false,
+        alternate: Character? = nil,
         @ViewBuilder label: () -> Label
     ) -> some View {
         let isPressed = pressedKey == id
         let baseColor: Color = isCharacterKey || emphasized
             ? Color(.systemBackground)
             : Color(.systemGray3)
-        return label()
+        let key = label()
             .foregroundStyle(.primary)
             .frame(maxWidth: width == nil ? .infinity : nil)
             .frame(width: width, height: height)
@@ -289,6 +364,17 @@ struct KeyboardRootView: View {
             .accessibilityLabel(Text(accessibilityLabel(for: id)))
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { activateFromAccessibility(id) }
+
+        if let alternate {
+            let spokenAlternate = KeyboardAlternateSymbols.spokenName(for: alternate)
+            key
+                .accessibilityHint(Text("Swipe down for \(spokenAlternate)."))
+                .accessibilityAction(named: Text("Insert \(spokenAlternate)")) {
+                    commitAlternate(alternate, from: id)
+                }
+        } else {
+            key
+        }
     }
 
     private func accessibilityLabel(for id: KeyID) -> String {
@@ -302,6 +388,31 @@ struct KeyboardRootView: View {
         case .layoutToggle:
             return layout == .numbers ? "More Symbols" : "Numbers"
         }
+    }
+
+    private func alternateSymbol(for character: Character) -> Character? {
+        if character.isNumber {
+            return KeyboardAlternateSymbols.alternate(for: character)
+        }
+        guard layout == .letters, character.isLetter else { return nil }
+        return KeyboardAlternateSymbols.alternate(for: character)
+    }
+
+    private func isPreviewingAlternate(for character: Character) -> Bool {
+        guard startKey == .character(character) else { return false }
+        switch touchMode {
+        case .alternatePreview, .alternateCommitted, .alternatePalette:
+            return true
+        case .idle, .pressed, .control, .deleting, .swiping:
+            return false
+        }
+    }
+
+    private var characterKeyWidth: CGFloat {
+        if let startKey, let frame = keyFrames[startKey] {
+            return frame.width
+        }
+        return geometry.tenColumnKeyWidth(totalWidth: Double(UIScreen.main.bounds.width))
     }
 
     private func activateFromAccessibility(_ id: KeyID) {
@@ -331,7 +442,7 @@ struct KeyboardRootView: View {
             }
             .foregroundStyle(.primary)
             .frame(maxWidth: width == nil ? .infinity : nil)
-            .frame(width: width, height: bottomKeyHeight)
+            .frame(width: width, height: keyHeight)
             .background(Color(.systemGray3), in: RoundedRectangle(cornerRadius: 6))
             .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
         }
@@ -361,7 +472,9 @@ struct KeyboardRootView: View {
         pressedKey = key
         guard let key else { return }
         KeyboardHaptics.keyDown()
-        if key == .delete {
+        switch key {
+        case .delete:
+            touchMode = .deleting
             manualDelete()
             deleteRepeater.begin(
                 deleteCharacter: {
@@ -373,13 +486,23 @@ struct KeyboardRootView: View {
                     KeyboardHaptics.deleteTick()
                 }
             )
+        case .character(let character):
+            touchMode = .pressed
+            if let alternate = alternateSymbol(for: character) {
+                scheduleAlternateHold(for: key, alternate: alternate)
+            }
+        case .shift, .layoutToggle:
+            touchMode = .control
         }
     }
 
     private func touchMoved(to point: CGPoint) {
         guard let start = touchStart else { return }
+        let deltaX = point.x - start.x
+        let deltaY = point.y - start.y
+        let travel = hypot(deltaX, deltaY)
 
-        if isSwiping {
+        if touchMode == .swiping {
             appendSwipePoint(point)
             if let letter = letterKey(at: point) {
                 pressedKey = .character(letter)
@@ -387,23 +510,84 @@ struct KeyboardRootView: View {
             return
         }
 
-        if case .character(let character)? = startKey,
-           layout == .letters,
-           character.isLetter,
-           hypot(point.x - start.x, point.y - start.y) > 24,
-           let current = letterKey(at: point),
-           current != character {
-            isSwiping = true
-            swipePoints = [start, point]
-            swipeKeys = [character, current]
-            return
+        if travel > CGFloat(KeyboardGestureResolver.previewDistance) {
+            alternateHoldTask?.cancel()
+            alternateHoldTask = nil
         }
 
-        if startKey == .delete {
+        if touchMode == .deleting {
             if key(at: point) != .delete {
                 deleteRepeater.stop()
                 pressedKey = nil
             }
+            return
+        }
+
+        if case .alternatePalette = touchMode {
+            let withinSelectionArea = abs(deltaX) <= keyHeight
+                && deltaY >= -keyHeight / 2
+                && deltaY <= keyHeight * 1.25
+            pressedKey = withinSelectionArea ? startKey : nil
+            return
+        }
+
+        if case .character(let character)? = startKey,
+           let alternate = alternateSymbol(for: character) {
+            let currentLetter = letterKey(at: point)
+            let enteredDifferentLetter = character.isLetter
+                && currentLetter != nil
+                && currentLetter != Character(String(character).lowercased())
+            let resolution = KeyboardGestureResolver.resolve(
+                deltaX: Double(deltaX),
+                deltaY: Double(deltaY),
+                keyWidth: Double(characterKeyWidth),
+                keyHeight: Double(keyHeight),
+                enteredDifferentLetter: enteredDifferentLetter
+            )
+            switch resolution {
+            case .alternatePreview:
+				if case .alternateCommitted = touchMode {
+					pressedKey = startKey
+					return
+				}
+                if touchMode != .alternatePreview(alternate) {
+                    KeyboardHaptics.keyDown()
+                }
+                touchMode = .alternatePreview(alternate)
+                pressedKey = startKey
+                return
+			case .alternateCommit:
+				if touchMode != .alternateCommitted(alternate) {
+					KeyboardHaptics.keyDown()
+				}
+				touchMode = .alternateCommitted(alternate)
+				pressedKey = startKey
+				return
+            case .wordSwipe:
+                if character.isLetter, let currentLetter {
+                    beginWordSwipe(from: character, to: currentLetter, start: start, point: point)
+                    return
+                }
+            case .primary:
+                if case .alternatePreview = touchMode {
+                    touchMode = .pressed
+				} else if case .alternateCommitted = touchMode {
+					pressedKey = startKey
+					return
+                }
+            }
+        } else if case .character(let character)? = startKey,
+                  layout == .letters,
+                  character.isLetter,
+                  travel >= CGFloat(KeyboardGestureResolver.swipeDistance),
+                  let current = letterKey(at: point),
+                  current != character {
+            beginWordSwipe(from: character, to: current, start: start, point: point)
+            return
+        }
+
+        if touchMode == .control {
+            pressedKey = key(at: point) == startKey ? startKey : nil
         } else {
             pressedKey = key(at: point)
         }
@@ -411,16 +595,19 @@ struct KeyboardRootView: View {
 
     private func touchEnded(at point: CGPoint) {
         deleteRepeater.stop()
+        alternateHoldTask?.cancel()
+        alternateHoldTask = nil
+        let endingMode = touchMode
         defer {
             touchStart = nil
             startKey = nil
             pressedKey = nil
-            isSwiping = false
+            touchMode = .idle
             swipePoints = []
             swipeKeys = []
         }
 
-        if isSwiping {
+        if endingMode == .swiping {
             if Set(swipeKeys).count >= 2 {
                 commitSwipe()
             } else if let startKey {
@@ -429,8 +616,55 @@ struct KeyboardRootView: View {
             return
         }
 
-        guard let startKey, let endingKey = key(at: point) else { return }
-        if startKey == .delete { return }
+        guard let startKey else { return }
+        if endingMode == .deleting { return }
+
+        switch endingMode {
+        case .alternatePreview(let alternate):
+            guard let start = touchStart else { return }
+            let resolution = KeyboardGestureResolver.resolve(
+                deltaX: Double(point.x - start.x),
+                deltaY: Double(point.y - start.y),
+                keyWidth: Double(characterKeyWidth),
+                keyHeight: Double(keyHeight),
+                enteredDifferentLetter: false
+            )
+            if resolution == .alternateCommit {
+                commitAlternate(alternate, from: startKey)
+            } else {
+                commitKey(startKey)
+            }
+            return
+		case .alternateCommitted(let alternate):
+			commitAlternate(alternate, from: startKey)
+			return
+        case .alternatePalette(let alternate):
+            guard pressedKey == startKey else { return }
+            commitAlternate(alternate, from: startKey)
+            return
+        case .idle, .deleting, .swiping:
+            return
+		case .pressed:
+			// A very fast flick can deliver only the initial change plus the final
+			// end location. Resolve that endpoint here so sparse touch sampling does
+			// not turn an intentional alternate into the primary character.
+			if case .character(let character) = startKey,
+			   let alternate = alternateSymbol(for: character),
+			   let start = touchStart,
+			   KeyboardGestureResolver.resolve(
+				deltaX: Double(point.x - start.x),
+				deltaY: Double(point.y - start.y),
+				keyWidth: Double(characterKeyWidth),
+				keyHeight: Double(keyHeight),
+				enteredDifferentLetter: false
+			   ) == .alternateCommit {
+				commitAlternate(alternate, from: startKey)
+				return
+			}
+			break
+		case .control:
+            break
+        }
 
         switch startKey {
         case .character:
@@ -438,7 +672,7 @@ struct KeyboardRootView: View {
             // real slide only begins after entering a second distinct letter.
             commitKey(startKey)
         case .shift, .layoutToggle:
-            guard endingKey == startKey else { return }
+            guard key(at: point) == startKey else { return }
             commitKey(startKey)
         case .delete:
             break
@@ -447,12 +681,41 @@ struct KeyboardRootView: View {
 
     private func cancelActiveTouch() {
         deleteRepeater.stop()
+        alternateHoldTask?.cancel()
+        alternateHoldTask = nil
         touchStart = nil
         startKey = nil
         pressedKey = nil
-        isSwiping = false
+        touchMode = .idle
         swipePoints = []
         swipeKeys = []
+    }
+
+    private func scheduleAlternateHold(for key: KeyID, alternate: Character) {
+        alternateHoldTask?.cancel()
+        alternateHoldTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled,
+                  touchMode == .pressed,
+                  startKey == key else { return }
+            touchMode = .alternatePalette(alternate)
+            pressedKey = key
+            KeyboardHaptics.keyDown()
+        }
+    }
+
+    private func beginWordSwipe(
+        from first: Character,
+        to current: Character,
+        start: CGPoint,
+        point: CGPoint
+    ) {
+        alternateHoldTask?.cancel()
+        alternateHoldTask = nil
+        touchMode = .swiping
+        swipePoints = [start, point]
+        swipeKeys = [Character(String(first).lowercased()), current]
+        pressedKey = .character(current)
     }
 
     private func commitKey(_ key: KeyID) {
@@ -480,6 +743,17 @@ struct KeyboardRootView: View {
         case .delete:
             break
         }
+    }
+
+    private func commitAlternate(_ alternate: Character, from key: KeyID) {
+        manualInsert(String(alternate))
+        if case .character(let primary) = key,
+           layout == .letters,
+           primary.isLetter,
+           shiftState == .once {
+            shiftState = .off
+        }
+        KeyboardHaptics.swipeCommit()
     }
 
     private func appendSwipePoint(_ point: CGPoint) {
@@ -546,9 +820,19 @@ struct KeyboardRootView: View {
     private func manualInsert(_ text: String, resetsSpaceTap: Bool = true) {
         lastInsertedText = nil
         if resetsSpaceTap { lastSpaceTapAt = nil }
-        insertText(text)
+		proxyInsertText(text)
         refreshAutomaticShift()
     }
+
+	private func proxyInsertText(_ text: String) {
+		localMutationGraceDeadline = Date().addingTimeInterval(0.25)
+		insertText(text)
+	}
+
+	private func proxyDeleteBackward() {
+		localMutationGraceDeadline = Date().addingTimeInterval(0.25)
+		deleteBackward()
+	}
 
     private func spaceTapped() {
         let now = Date()
@@ -560,8 +844,8 @@ struct KeyboardRootView: View {
             elapsedSincePreviousSpace: elapsed,
             fieldKind: fieldKind()
         ) {
-            deleteBackward()
-            insertText(". ")
+			proxyDeleteBackward()
+			proxyInsertText(". ")
             lastInsertedText = nil
             lastSpaceTapAt = nil
             refreshAutomaticShift()
@@ -574,7 +858,7 @@ struct KeyboardRootView: View {
     private func manualDelete() {
         lastInsertedText = nil
         lastSpaceTapAt = nil
-        deleteBackward()
+		proxyDeleteBackward()
         refreshAutomaticShift()
     }
 
@@ -619,7 +903,7 @@ struct KeyboardRootView: View {
             index = previous
         }
         for _ in 0..<max(count, 1) {
-            deleteBackward()
+			proxyDeleteBackward()
         }
         refreshAutomaticShift()
     }
@@ -633,7 +917,7 @@ struct KeyboardRootView: View {
         }
 
         for _ in lastInsertedText {
-            deleteBackward()
+			proxyDeleteBackward()
         }
         self.lastInsertedText = nil
         refreshAutomaticShift()
@@ -710,6 +994,7 @@ struct KeyboardRootView: View {
         .padding(.horizontal, 12)
         .frame(height: dictationBarHeight)
         .background(.background, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .padding(.horizontal, outerInset)
     }
 
     private func beginDictation() {

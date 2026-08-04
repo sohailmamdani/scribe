@@ -17,10 +17,10 @@ Press a global hotkey, speak, release — your words are transcribed locally and
 Scribe is built around a simple promise: your voice stays on your device.
 
 - **No analytics.** No telemetry, no crash reporting, no usage tracking. Nothing is sent anywhere.
-- **No network calls during transcription.** WhisperKit downloads the model from Hugging Face on first launch (~3 GB); after that, transcription is fully offline.
+- **No audio uploads.** Transcription stays on-device. Network access is limited to downloading the Whisper models and checking for desktop app updates; existing installs may continue dictating with Base while Large-v3 downloads.
 - **No account, no sign-up.** The app does not have a server.
-- **No background recording.** The microphone is only active while you're holding (or have toggled on) recording.
-- **Auto-update is the only outbound network call.** Once a day, the app fetches a small XML file (`appcast.xml`) from GitHub Pages to check for new versions. No identifying information is sent — Sparkle's optional system-profiling feature is explicitly disabled. You can turn off automatic checks entirely in the update prompt.
+- **No retained background audio.** During an active 15-minute iOS keyboard session, Scribe keeps the microphone route alive so the next dictation starts reliably, but discards interim audio buffers immediately. Only an explicit dictation is saved or transcribed.
+- **Network use is limited and explicit.** Scribe downloads its on-device Whisper model from Hugging Face. The macOS app also checks a small GitHub Pages `appcast.xml` once a day for updates; Sparkle's optional system profiling is disabled, and automatic checks can be turned off.
 
 If privacy is the reason you're here, Scribe is the right shape for you.
 
@@ -39,6 +39,8 @@ For the iOS app and keyboard:
 ## iPhone and iPad
 
 The `Scribe iOS` target includes a containing app and an embedded `ScribeKeyboard` extension. From any standard text field, switch to Scribe Keyboard and tap **Dictate**. The keyboard asks iOS to open Scribe, the containing app activates the microphone, and recording continues while you return to the original app. Scribe transcribes and polishes the recording locally and inserts the result at the cursor. On recent iOS versions, you may need to swipe back once after Scribe opens.
+
+The iOS app uses Argmax's compressed Whisper Large-v3 model for High Accuracy transcription. Existing installs can keep dictating with their cached Base model while Large-v3 downloads and prepares; Base also remains the CPU-only fallback when Core ML rejects a prediction. The keyboard follows the captured iOS key grid, adds a permanent number row, and exposes the small alternate shown on each key with a downward flick or press-and-hold.
 
 To enable the keyboard:
 

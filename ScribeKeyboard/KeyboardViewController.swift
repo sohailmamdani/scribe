@@ -60,7 +60,9 @@ final class KeyboardViewController: UIInputViewController {
         addChild(hostingController)
         view.addSubview(hostingController.view)
         hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-        let heightConstraint = view.heightAnchor.constraint(equalToConstant: 286)
+        let heightConstraint = view.heightAnchor.constraint(
+            equalToConstant: KeyboardGeometryRules.portrait.extensionHeight
+        )
         heightConstraint.priority = UILayoutPriority(999)
         NSLayoutConstraint.activate([
             hostingController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -72,7 +74,6 @@ final class KeyboardViewController: UIInputViewController {
         hostingController.didMove(toParent: self)
         self.hostingController = hostingController
         keyboardHeightConstraint = heightConstraint
-        updateKeyboardHeight()
     }
 
     override func viewDidLayoutSubviews() {
@@ -83,6 +84,7 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         updateHostEnvironment()
+        updateKeyboardHeight()
     }
 
     override func textDidChange(_ textInput: (any UITextInput)?) {
@@ -105,7 +107,13 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func updateKeyboardHeight() {
-        let desiredHeight: CGFloat = traitCollection.verticalSizeClass == .compact ? 224 : 286
+        let isCompact = traitCollection.verticalSizeClass == .compact
+        let geometry = isCompact ? KeyboardGeometryRules.compact : .portrait
+        // The portrait value is the captured iOS 26 system keyboard content
+        // height plus one 56-point native key-row pitch. Keeping the complete
+        // formula in shared geometry prevents SwiftUI from compressing away
+        // the number row when the extension is laid out.
+        let desiredHeight = CGFloat(geometry.extensionHeight)
         if keyboardHeightConstraint?.constant != desiredHeight {
             keyboardHeightConstraint?.constant = desiredHeight
         }

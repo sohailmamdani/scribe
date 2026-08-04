@@ -8,11 +8,11 @@ Scribe for iOS is split across three source roots:
 
 ## Dictation flow
 
-1. The keyboard writes a pending start command into the shared App Group and asks iOS to open `scribe://dictate` through its extension context.
-2. When Scribe becomes active, the containing app consumes the pending command, loads a pinned WhisperKit model if needed, requests microphone access, and begins recording.
+1. The keyboard writes a pending command into the shared App Group and asks iOS to wake the containing app through `scribe://wake`.
+2. When Scribe becomes active, the containing app consumes the pending command, loads a pinned WhisperKit model if needed, requests microphone access, and begins recording. Upgrades keep cached Base immediately usable while the compressed Large-v3 High Accuracy model installs in parallel.
 3. The user returns to the originating app. On iOS versions that do not switch back automatically, Scribe shows a clear swipe-back instruction. The keyboard polls the App Group and reflects recording state and audio level.
 4. Tapping stop writes a stop command. The containing app stops recording and finishes transcription under a background task.
-5. The app retries Core ML inference with CPU-only compatibility mode if the normal CPU/GPU path fails. Failed recordings remain on disk for a user-initiated retry instead of being deleted.
+5. The app retries Core ML inference with the Base model in CPU-only compatibility mode if Large-v3 fails with a recognized Core ML or prediction error. The compatibility preference is versioned by model and OS version, and failed recordings remain on disk for a user-initiated retry instead of being deleted.
 6. The app removes conservative filler words and direct word repeats, then publishes the result with a unique result identifier.
 7. The keyboard consumes the result exactly once, adjusts spacing for the surrounding text, and calls `textDocumentProxy.insertText`.
 
@@ -23,13 +23,13 @@ No audio is placed in the App Group. Only commands, status, an audio meter value
 - App: `sohail.Scribe.mobile`
 - Keyboard: `sohail.Scribe.mobile.keyboard`
 - App Group: `group.sohail.Scribe`
-- URL schemes: `scribe://dictate` and `scribe://retry`
+- URL scheme: `scribe://wake`; the pending App Group command determines whether to start, stop, cancel, or retry.
 
 Both targets need the App Group enabled in the Apple Developer portal before installing a signed device build.
 
 ## Current product boundary
 
-This first build provides the system keyboard, app handoff, local transcription, conservative text cleanup, context-aware insertion, safe undo, recent local history, and recording/transcription state. More aggressive AI rewriting, custom vocabulary, live partial text, Action Button/App Intent entry points, and a selectable Parakeet engine remain separate follow-on features so the first release can be validated against real dictation before changing users' words more aggressively.
+The keyboard uses the same portrait key height, column width, control proportions, and spacing measured from the iOS 26 system keyboard on iPhone 17 Pro Max, with one additional native row pitch for permanent numbers. Common alternates are printed on the key caps and can be entered by a downward flick, press-and-hold selection, or a named VoiceOver action. Double-space period, automatic capitalization, hold-delete, and word swiping remain available.
 
 ## TestFlight release
 
