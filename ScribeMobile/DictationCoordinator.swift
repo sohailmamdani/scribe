@@ -1122,10 +1122,18 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	}
 
 	private func transcribeWithRecovery(audioURL: URL) async throws -> [TranscriptionResult] {
+		let options = DecodingOptions(
+			skipSpecialTokens: true,
+			withoutTimestamps: true,
+			suppressBlank: true
+		)
 		do {
 			try await prepareModelWithRecovery()
 			guard let whisperKit else { throw DictationError.modelUnavailable }
-			return try await whisperKit.transcribe(audioPath: audioURL.path)
+			return try await whisperKit.transcribe(
+				audioPath: audioURL.path,
+				decodeOptions: options
+			)
 		} catch {
 			guard modelProfile != .compatibility,
 			      shouldUseCompatibilityMode(for: error) else { throw error }
@@ -1134,7 +1142,10 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			await unloadCurrentModel()
 			try await prepareModelIfNeeded(profile: .compatibility)
 			guard let whisperKit else { throw DictationError.modelUnavailable }
-			let result = try await whisperKit.transcribe(audioPath: audioURL.path)
+			let result = try await whisperKit.transcribe(
+				audioPath: audioURL.path,
+				decodeOptions: options
+			)
 			persistCompatibilityPreference()
 			return result
 		}

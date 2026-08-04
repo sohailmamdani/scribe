@@ -123,6 +123,7 @@ enum KeyboardEditingRules {
         let trimmed = suggestion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               !trimmed.contains(where: \Character.isWhitespace),
+              isWordSafeCorrectionCandidate(trimmed),
               trimmed.caseInsensitiveCompare(original) != .orderedSame else {
             return nil
         }
@@ -188,10 +189,18 @@ enum KeyboardEditingRules {
         let destination = suggestion.lowercased()
         guard source.count >= 3,
               destination.count >= 2,
+              isWordSafeCorrectionCandidate(source),
+              isWordSafeCorrectionCandidate(destination),
               source != destination else {
             return false
         }
         return correctionDistance(source, destination) == 1
+    }
+
+    static func isWordSafeCorrectionCandidate(_ word: String) -> Bool {
+        !word.isEmpty && word.allSatisfy { character in
+            character.isLetter || character == "'" || character == "’"
+        }
     }
 
     /// Optimal-string-alignment distance: Levenshtein edits plus one adjacent

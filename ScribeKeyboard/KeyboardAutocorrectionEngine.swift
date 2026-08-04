@@ -39,7 +39,7 @@ final class KeyboardAutocorrectionEngine {
     private let defaults: UserDefaults
 
     private static let rejectedWordsKey = "keyboard.autocorrect.rejectedWords.v1"
-    private static let acceptedCorrectionsKey = "keyboard.autocorrect.acceptedPairs.v1"
+    private static let acceptedCorrectionsKey = "keyboard.autocorrect.acceptedPairs.v2"
 
     convenience init() {
         self.init(
@@ -118,6 +118,9 @@ final class KeyboardAutocorrectionEngine {
         candidateWords.remove(original)
 
         let ranked = candidateWords.compactMap { candidate -> RankedCandidate? in
+            guard KeyboardEditingRules.isWordSafeCorrectionCandidate(candidate) else {
+                return nil
+            }
             let distance = KeyboardEditingRules.correctionDistance(original, candidate)
             let maximumDistance = original.count >= 8 ? 3 : (original.count >= 4 ? 2 : 1)
             guard distance <= maximumDistance else { return nil }
@@ -152,16 +155,10 @@ final class KeyboardAutocorrectionEngine {
         }
 
         guard let best = ranked.first else { return [] }
-        let originalBigramFrequency = previousWord.flatMap {
-            bigramFrequencies[$0]?[original]
-        } ?? 0
-        let runnerUpScore = ranked.dropFirst().first?.score ?? .infinity
         let automaticallyReplaces = shouldAutomaticallyReplace(
             original: original,
             candidate: best,
-            isMisspelled: isMisspelled,
-            originalBigramFrequency: originalBigramFrequency,
-            scoreMargin: runnerUpScore - best.score
+            isMisspelled: isMisspelled
         )
 
         return Array(ranked.prefix(3).map { candidate in
@@ -242,23 +239,14 @@ final class KeyboardAutocorrectionEngine {
     private func shouldAutomaticallyReplace(
         original: String,
         candidate: RankedCandidate,
-        isMisspelled: Bool,
-        originalBigramFrequency: Int64,
-        scoreMargin: Double
+        isMisspelled: Bool
     ) -> Bool {
-        if isMisspelled {
-            if candidate.distance == 1 { return true }
-            return original.count >= 5
-                && candidate.distance == 2
-                && (candidate.systemRank == 0 || scoreMargin >= 10)
-        }
-
-        guard candidate.distance == 1,
-              candidate.bigramFrequency >= 10_000_000 else {
-            return false
-        }
-        return originalBigramFrequency == 0
-            || candidate.bigramFrequency / max(1, originalBigramFrequency) >= 50
+        isMisspelled
+            && candidate.systemRank == 0
+            && KeyboardEditingRules.shouldAutomaticallyReplace(
+                original,
+                with: candidate.word
+            )
     }
 
     private func isSingleNeighborSubstitution(_ source: String, _ destination: String) -> Bool {

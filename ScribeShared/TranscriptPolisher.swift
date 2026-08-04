@@ -3,6 +3,11 @@ import Foundation
 enum TranscriptPolisher {
     static func polish(_ rawText: String) -> String {
         var text = rawText
+            .replacingOccurrences(
+                of: #"(?i)\[\s*(?:blank[\s_-]*audio|no[\s_-]*speech)\s*\]"#,
+                with: " ",
+                options: .regularExpression
+            )
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 

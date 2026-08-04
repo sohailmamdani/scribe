@@ -159,8 +159,15 @@ final class KeyboardEditingRulesTests: XCTestCase {
     func testAutomaticCorrectionOnlyCommitsCloseTypos() {
         XCTAssertTrue(KeyboardEditingRules.shouldAutomaticallyReplace("teh", with: "the"))
         XCTAssertTrue(KeyboardEditingRules.shouldAutomaticallyReplace("hellp", with: "hello"))
+        XCTAssertTrue(KeyboardEditingRules.shouldAutomaticallyReplace("dont", with: "don't"))
         XCTAssertFalse(KeyboardEditingRules.shouldAutomaticallyReplace("an", with: "and"))
         XCTAssertFalse(KeyboardEditingRules.shouldAutomaticallyReplace("house", with: "horsepower"))
+        XCTAssertFalse(
+            KeyboardEditingRules.shouldAutomaticallyReplace("testflight", with: "test-flight")
+        )
+        XCTAssertFalse(
+            KeyboardEditingRules.shouldAutomaticallyReplace("noworry", with: "no-worry")
+        )
     }
 
     func testCorrectionCandidatesAreDeduplicatedAndRejectWildGuesses() {
