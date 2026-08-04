@@ -55,6 +55,8 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	private var recordingStartGeneration: UUID?
     private var transcriptionGeneration: UUID?
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+	private var modelPreparationTaskID: UIBackgroundTaskIdentifier = .invalid
+	private var memoryWarningObserver: NSObjectProtocol?
 	private var lastHeartbeat = Date.distantPast
 	private let processID = UUID().uuidString
 	private var currentRequestID: String?
@@ -112,7 +114,38 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		)
 		// A fresh process invalidates the prior process's advertised session.
 		sharedStore.endSession()
+		observeMemoryWarnings()
     }
+
+	/// Scribe holds the largest allocation on the device by a wide margin. It
+	/// never listened for memory pressure, so iOS's warning — the one chance to
+	/// survive by giving something back — passed unheard and the process was
+	/// killed outright. Dropping the model is recoverable; being killed is not.
+	private func observeMemoryWarnings() {
+		guard memoryWarningObserver == nil else { return }
+		memoryWarningObserver = NotificationCenter.default.addObserver(
+			forName: UIApplication.didReceiveMemoryWarningNotification,
+			object: nil,
+			queue: .main
+		) { _ in
+			Task { @MainActor [weak self] in
+				await self?.releaseModelUnderMemoryPressure()
+			}
+		}
+	}
+
+	private func releaseModelUnderMemoryPressure() async {
+		// Never pull the model out from under work in flight: the recording or
+		// transcript would be lost, which is worse than the risk of the kill.
+		guard whisperKit != nil,
+		      !isPreparingModel,
+		      !isTranscribing,
+		      audioRecorder == nil else { return }
+		logger.warning("Releasing the transcription model after a memory warning")
+		await unloadCurrentModel()
+		activeModelName = "Model released to save memory"
+		if state == .ready { state = .preparing }
+	}
 
 	deinit {
 		meterTask?.cancel()
@@ -126,6 +159,9 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		if let interruptionObserver {
             NotificationCenter.default.removeObserver(interruptionObserver)
         }
+		if let memoryWarningObserver {
+			NotificationCenter.default.removeObserver(memoryWarningObserver)
+		}
     }
 
     func prepareModel() async {
@@ -747,8 +783,15 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 	private func prepareModelWithRecovery() async throws {
 		let ownsHeartbeat = startPreparationHeartbeatIfNeeded()
+		// A live flow session lets the keyboard start a dictation while Scribe
+		// is in the background, so this load frequently runs with the app not
+		// on screen. Without an assertion iOS is free to suspend the process
+		// part-way through, which surfaces to the user as the app dying while
+		// the model loads. Transcription already held one; preparation did not.
+		let ownsAssertion = beginModelPreparationTask()
 		defer {
 			if ownsHeartbeat { stopPreparationHeartbeat() }
+			if ownsAssertion { endModelPreparationTask() }
 		}
 
 		let preferredProfile = preferredModelProfile
@@ -862,16 +905,14 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			await kit.unloadModels()
 			throw CancellationError()
 		}
-		updateModelPreparationStatus(
-			profile == .highAccuracy
-				? "Optimizing High Accuracy model for this iPhone…"
-				: "Optimizing the reliable fallback…"
-		)
-		try await kit.prewarmModels()
-		if honorsCancellation, Task.isCancelled {
-			await kit.unloadModels()
-			throw CancellationError()
-		}
+		// `prewarmModels()` is `loadModels(prewarmMode: true)`, and prewarm mode
+		// discards each component the instant it finishes loading it
+		// (`model = prewarmMode ? nil : loadedModel`). Calling it before
+		// `loadModels()` therefore read every weight file from disk twice and
+		// paid the CoreML load cost twice, for no residual benefit — the
+		// on-disk compilation cache that prewarming warms is populated by the
+		// real load anyway. On a multi-hundred-megabyte model that doubled the
+		// window in which the app could be killed mid-load.
 		updateModelPreparationStatus("Loading private on-device transcription…")
 		try await kit.loadModels()
 		if honorsCancellation, Task.isCancelled {
@@ -1392,6 +1433,27 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		}
 	}
 
+	/// Kept separate from the transcription assertion: model preparation nests
+	/// inside transcription, and sharing one identifier would let the inner
+	/// scope end the outer one early.
+	private func beginModelPreparationTask() -> Bool {
+		guard modelPreparationTaskID == .invalid else { return false }
+		modelPreparationTaskID = UIApplication.shared.beginBackgroundTask(
+			withName: "Prepare Scribe transcription model"
+		) {
+			Task { @MainActor [weak self] in
+				self?.endModelPreparationTask()
+			}
+		}
+		return modelPreparationTaskID != .invalid
+	}
+
+	private func endModelPreparationTask() {
+		guard modelPreparationTaskID != .invalid else { return }
+		UIApplication.shared.endBackgroundTask(modelPreparationTaskID)
+		modelPreparationTaskID = .invalid
+	}
+
     private func beginBackgroundTask() {
         guard backgroundTaskID == .invalid else { return }
 		backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "Finish Scribe transcription") {
@@ -1498,7 +1560,7 @@ private enum DictationError: LocalizedError {
         case .modelUnavailable:
             "The on-device transcription model isn’t ready."
         case .insufficientModelStorage:
-            "High Accuracy needs about 2.6 GB of free storage."
+            "High Accuracy needs about 1.9 GB of free storage."
 		case .incompleteModelDownload(let components):
 			"The High Accuracy download is incomplete: \(components.joined(separator: ", "))."
         case .noSpeechDetected:
@@ -1509,7 +1571,7 @@ private enum DictationError: LocalizedError {
 	var modelInstallationMessage: String {
 		switch self {
 		case .insufficientModelStorage:
-			"High Accuracy needs about 2.6 GB free. Free some storage, then try again."
+			"High Accuracy needs about 1.9 GB free. Free some storage, then try again."
 		case .incompleteModelDownload:
 			"High Accuracy found an incomplete cache. Tap Try High Accuracy again — Scribe will repair and resume it."
 		case .modelUnavailable, .recordingDidNotStart, .noSpeechDetected:

@@ -6,21 +6,21 @@ enum ScribeModelProfile: String, Equatable, Sendable {
 
     var downloadVariant: String {
         switch self {
-        case .highAccuracy: "large-v3-v20240930"
+        case .highAccuracy: "large-v3_947MB"
         case .compatibility: "base"
         }
     }
 
     var folderName: String {
         switch self {
-        case .highAccuracy: "openai_whisper-large-v3-v20240930"
+        case .highAccuracy: "openai_whisper-large-v3_947MB"
         case .compatibility: "openai_whisper-base"
         }
     }
 
     var displayName: String {
         switch self {
-        case .highAccuracy: "Whisper Large-v3 Turbo"
+        case .highAccuracy: "Whisper Large-v3"
         case .compatibility: "Whisper Base compatibility"
         }
     }
@@ -41,10 +41,13 @@ enum ScribeModelProfile: String, Equatable, Sendable {
                 .init(name: "TextDecoder"),
             ]
         case .highAccuracy:
+            // Actual sizes are 373 KB / 354 MB / 591 MB. Note the encoder is
+            // *smaller* than the quantized turbo build it replaces; the growth
+            // is entirely in the 32-layer decoder.
             [
                 .init(name: "MelSpectrogram", minimumWeightBytes: 300_000),
-                .init(name: "AudioEncoder", minimumWeightBytes: 1_200_000_000),
-                .init(name: "TextDecoder", minimumWeightBytes: 320_000_000),
+                .init(name: "AudioEncoder", minimumWeightBytes: 330_000_000),
+                .init(name: "TextDecoder", minimumWeightBytes: 550_000_000),
             ]
         }
     }
@@ -150,9 +153,9 @@ enum ScribeModelFallbackPolicy {
 enum ScribeModelDownloadPolicy {
     static let maximumAttempts = 4
 
-    /// The full-precision Large-v3 Turbo weights total roughly 1.6 GB. Require
-    /// headroom for the download, the tokenizer, and CoreML's compiled cache.
-    static let minimumHighAccuracyCapacity: Int64 = 2_600_000_000
+    /// The Large-v3 weights total roughly 945 MB. Require headroom for the
+    /// download, the tokenizer, and CoreML's compiled cache.
+    static let minimumHighAccuracyCapacity: Int64 = 1_900_000_000
 
     static func retryDelay(afterFailedAttempt attempt: Int) -> TimeInterval {
         switch attempt {
@@ -178,7 +181,7 @@ enum ScribeModelDownloadPolicy {
     static func installationFailureMessage(for error: NSError) -> String {
         let errors = errorChain(startingAt: error)
         if errors.contains(where: isOutOfSpace) {
-            return "High Accuracy needs about 2.6 GB free. Free some storage, then try again."
+            return "High Accuracy needs about 1.9 GB free. Free some storage, then try again."
         }
         if errors.contains(where: { $0.domain == NSURLErrorDomain }) {
             return "High Accuracy was interrupted. Keep Scribe open on a stable connection, then tap Try High Accuracy again — the download will resume."

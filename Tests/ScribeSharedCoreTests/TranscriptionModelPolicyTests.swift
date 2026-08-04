@@ -4,19 +4,22 @@ import XCTest
 final class TranscriptionModelPolicyTests: XCTestCase {
     func testHighAccuracyIsTheDefault() {
         XCTAssertEqual(ScribeModelPolicy.primary, .highAccuracy)
-        XCTAssertEqual(ScribeModelPolicy.primary.downloadVariant, "large-v3-v20240930")
+        XCTAssertEqual(ScribeModelPolicy.primary.downloadVariant, "large-v3_947MB")
         XCTAssertEqual(
             ScribeModelPolicy.primary.folderName,
-            "openai_whisper-large-v3-v20240930"
+            "openai_whisper-large-v3_947MB"
         )
         XCTAssertFalse(ScribeModelPolicy.primary.usesCPUOnly)
     }
 
-    /// The quantized `_626MB` build measurably trailed the Mac app. The device
-    /// must pull the full-precision weights, not a compressed variant.
-    func testHighAccuracyUsesFullPrecisionWeights() {
-        XCTAssertFalse(ScribeModelPolicy.primary.downloadVariant.contains("MB"))
-        XCTAssertFalse(ScribeModelPolicy.primary.folderName.contains("MB"))
+    /// `large-v3-v20240930` is the *turbo* release: 4 decoder layers instead of
+    /// 32. Decoding is where transcription accuracy lives, so High Accuracy has
+    /// to run the full decoder. Full-precision turbo was rejected separately —
+    /// at 1.62 GB it made an existing out-of-memory crash worse.
+    func testHighAccuracyUsesTheFullDecoderNotTurbo() {
+        XCTAssertFalse(ScribeModelPolicy.primary.folderName.contains("v20240930"))
+        XCTAssertFalse(ScribeModelPolicy.primary.folderName.contains("turbo"))
+        XCTAssertTrue(ScribeModelPolicy.primary.folderName.contains("large-v3"))
     }
 
     func testCompatibilityUsesBaseAndCPUOnly() {
@@ -173,12 +176,17 @@ final class TranscriptionModelPolicyTests: XCTestCase {
         ])
         XCTAssertTrue(requirements.allSatisfy { ($0.minimumWeightBytes ?? 0) > 0 })
 
-        // Floors must sit below the real full-precision sizes but far above a
-        // truncated download.
+        // Floors sit below the real published sizes but far above a truncated
+        // download. Real: AudioEncoder 353,908,416 / TextDecoder 590,719,924.
         let encoder = requirements.first { $0.name == "AudioEncoder" }
         XCTAssertNotNil(encoder?.minimumWeightBytes)
-        XCTAssertLessThan(encoder!.minimumWeightBytes!, 1_273_974_400)
-        XCTAssertGreaterThan(encoder!.minimumWeightBytes!, 1_000_000_000)
+        XCTAssertLessThan(encoder!.minimumWeightBytes!, 353_908_416)
+        XCTAssertGreaterThan(encoder!.minimumWeightBytes!, 250_000_000)
+
+        let decoder = requirements.first { $0.name == "TextDecoder" }
+        XCTAssertNotNil(decoder?.minimumWeightBytes)
+        XCTAssertLessThan(decoder!.minimumWeightBytes!, 590_719_924)
+        XCTAssertGreaterThan(decoder!.minimumWeightBytes!, 400_000_000)
 
         XCTAssertTrue(
             ScribeModelPolicy.fallback.componentRequirements.allSatisfy {
@@ -187,10 +195,10 @@ final class TranscriptionModelPolicyTests: XCTestCase {
         )
     }
 
-    func testStorageRequirementCoversTheFullPrecisionDownload() {
+    func testStorageRequirementCoversTheDownloadWithHeadroom() {
         XCTAssertGreaterThan(
             ScribeModelDownloadPolicy.minimumHighAccuracyCapacity,
-            1_618_281_524
+            945_001_716
         )
     }
 
@@ -203,7 +211,7 @@ final class TranscriptionModelPolicyTests: XCTestCase {
         let storageMessage = ScribeModelDownloadPolicy.installationFailureMessage(
             for: NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError)
         )
-        XCTAssertTrue(storageMessage.contains("2.6 GB"))
+        XCTAssertTrue(storageMessage.contains("1.9 GB"))
     }
 
     // MARK: - Language pinning
