@@ -20,6 +20,16 @@ enum KeyboardHaptics {
         deleteRepeat.prepare()
     }
 
+    static func cursorTick() {
+        deleteRepeat.impactOccurred(intensity: 0.35)
+        deleteRepeat.prepare()
+    }
+
+    static func cursorModeBegan() {
+        wordCommit.impactOccurred(intensity: 0.8)
+        wordCommit.prepare()
+    }
+
     static func swipeCommit() {
         wordCommit.impactOccurred()
         wordCommit.prepare()

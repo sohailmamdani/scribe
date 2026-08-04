@@ -13,10 +13,13 @@ struct KeyboardRootView: View {
     @ObservedObject var documentState: KeyboardDocumentState
     let insertText: (String) -> Void
     let deleteBackward: () -> Void
+    let adjustTextPosition: (Int) -> Void
     let advanceInputMode: () -> Void
     let context: () -> (String?, String?)
     let fieldKind: () -> KeyboardFieldKind
     let capitalizationMode: () -> KeyboardCapitalizationMode
+    let autocorrectionEnabled: () -> Bool
+    let correctionForWord: (String) -> String?
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
 
     @Environment(\.openURL) private var openURL
@@ -41,6 +44,12 @@ struct KeyboardRootView: View {
     @State private var alternateHoldTask: Task<Void, Never>?
     @State private var swipePoints: [CGPoint] = []
     @State private var swipeKeys: [Character] = []
+    @State private var spaceGestureIsActive = false
+    @State private var spaceIsPressed = false
+    @State private var spaceCursorMode = false
+    @State private var spaceCursorStep = 0
+    @State private var spaceMaximumTravel: CGFloat = 0
+    @State private var spaceHoldTask: Task<Void, Never>?
 
     private static let keySpace = "keyArea"
 
@@ -80,13 +89,16 @@ struct KeyboardRootView: View {
                     dictationBar
                     VStack(spacing: verticalGap) {
                         keyArea
+                            .opacity(spaceCursorMode ? 0.16 : 1)
                         bottomRow
                     }
+                    .padding(.top, geometry.toolbarToKeyGap)
                 }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(.systemGray5))
+        .animation(.easeOut(duration: 0.14), value: spaceCursorMode)
         .onAppear {
             synchronizeDocumentState()
             state.start { transcript in
@@ -117,6 +129,7 @@ struct KeyboardRootView: View {
         .onDisappear {
             state.stop()
             cancelActiveTouch()
+            cancelSpaceGesture()
         }
     }
 
@@ -272,8 +285,9 @@ struct KeyboardRootView: View {
                     layout = layout == .letters ? .numbers : .letters
                     if layout == .letters { refreshAutomaticShift() }
                 }
-                bottomKey(title: "space", width: nil) { spaceTapped() }
+                spaceKey
                 bottomKey(systemName: "return", width: returnWidth) {
+                    applyAutocorrectionIfNeeded()
                     manualInsert("\n")
                 }
             }
@@ -447,6 +461,83 @@ struct KeyboardRootView: View {
             .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
         }
         .buttonStyle(HapticKeyStyle())
+    }
+
+    private var spaceKey: some View {
+        Text(spaceCursorMode ? "Move cursor" : "space")
+            .font(.system(size: 15, weight: spaceCursorMode ? .semibold : .regular))
+            .foregroundStyle(spaceCursorMode ? Color.indigo : Color.primary)
+            .frame(maxWidth: .infinity)
+            .frame(height: keyHeight)
+            .background(
+                spaceIsPressed ? Color(.systemGray2) : Color(.systemGray3),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
+            .contentShape(Rectangle())
+            .gesture(spaceCursorGesture)
+            .accessibilityElement()
+            .accessibilityLabel("Space")
+            .accessibilityHint("Touch and hold, then drag to move the cursor.")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { spaceTapped() }
+    }
+
+    private var spaceCursorGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if !spaceGestureIsActive {
+                    beginSpaceGesture()
+                }
+
+                let travel = hypot(value.translation.width, value.translation.height)
+                spaceMaximumTravel = max(spaceMaximumTravel, travel)
+                guard spaceCursorMode else { return }
+
+                let step = KeyboardCursorRules.characterOffset(
+                    forHorizontalTranslation: Double(value.translation.width)
+                )
+                let delta = step - spaceCursorStep
+                guard delta != 0 else { return }
+                spaceCursorStep = step
+                proxyAdjustTextPosition(delta)
+                KeyboardHaptics.cursorTick()
+            }
+            .onEnded { value in
+                let endTravel = hypot(value.translation.width, value.translation.height)
+                let shouldInsertSpace = !spaceCursorMode
+                    && max(spaceMaximumTravel, endTravel) < 14
+                cancelSpaceGesture()
+                if shouldInsertSpace { spaceTapped() }
+            }
+    }
+
+    private func beginSpaceGesture() {
+        spaceGestureIsActive = true
+        spaceIsPressed = true
+        spaceCursorStep = 0
+        spaceMaximumTravel = 0
+        KeyboardHaptics.keyDown()
+        spaceHoldTask?.cancel()
+        spaceHoldTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled,
+                  spaceGestureIsActive else { return }
+            lastSpaceTapAt = nil
+            lastInsertedText = nil
+            spaceCursorMode = true
+            KeyboardHaptics.cursorModeBegan()
+        }
+    }
+
+    private func cancelSpaceGesture() {
+        spaceHoldTask?.cancel()
+        spaceHoldTask = nil
+        spaceGestureIsActive = false
+        spaceIsPressed = false
+        spaceCursorMode = false
+        spaceCursorStep = 0
+        spaceMaximumTravel = 0
     }
 
     // MARK: - Touch handling
@@ -724,6 +815,9 @@ struct KeyboardRootView: View {
             let value = layout == .letters && shiftState.usesUppercase && character.isLetter
                 ? String(character).uppercased()
                 : String(character)
+            if ".,!?;:".contains(character) {
+                applyAutocorrectionIfNeeded()
+            }
             manualInsert(value)
             if layout == .letters, character.isLetter, shiftState == .once {
                 shiftState = .off
@@ -834,6 +928,32 @@ struct KeyboardRootView: View {
 		deleteBackward()
 	}
 
+    private func proxyAdjustTextPosition(_ offset: Int) {
+        localMutationGraceDeadline = Date().addingTimeInterval(0.25)
+        adjustTextPosition(offset)
+    }
+
+    @discardableResult
+    private func applyAutocorrectionIfNeeded() -> Bool {
+        guard let word = KeyboardEditingRules.autocorrectionWord(
+            contextBefore: context().0,
+            fieldKind: fieldKind(),
+            autocorrectionEnabled: autocorrectionEnabled()
+        ),
+              let suggestion = correctionForWord(word),
+              let replacement = KeyboardEditingRules.replacement(
+                suggestion,
+                matchingCapitalizationOf: word
+              ) else {
+            return false
+        }
+
+        for _ in word { proxyDeleteBackward() }
+        proxyInsertText(replacement)
+        lastInsertedText = nil
+        return true
+    }
+
     private func spaceTapped() {
         let now = Date()
         let elapsed = lastSpaceTapAt.map { now.timeIntervalSince($0) }
@@ -850,6 +970,7 @@ struct KeyboardRootView: View {
             lastSpaceTapAt = nil
             refreshAutomaticShift()
         } else {
+            applyAutocorrectionIfNeeded()
             manualInsert(" ", resetsSpaceTap: false)
             lastSpaceTapAt = now
         }

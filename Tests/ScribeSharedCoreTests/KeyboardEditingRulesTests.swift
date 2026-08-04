@@ -74,4 +74,61 @@ final class KeyboardEditingRulesTests: XCTestCase {
             .locked
         )
     }
+
+    func testAutocorrectionExtractsTheWordAtTheCursor() {
+        XCTAssertEqual(
+            KeyboardEditingRules.autocorrectionWord(
+                contextBefore: "Please type teh",
+                fieldKind: .text,
+                autocorrectionEnabled: true
+            ),
+            "teh"
+        )
+        XCTAssertEqual(
+            KeyboardEditingRules.autocorrectionWord(
+                contextBefore: "That isn’t",
+                fieldKind: .text,
+                autocorrectionEnabled: true
+            ),
+            "isn’t"
+        )
+    }
+
+    func testAutocorrectionRespectsHostTraitsAndFieldKind() {
+        XCTAssertNil(
+            KeyboardEditingRules.autocorrectionWord(
+                contextBefore: "teh",
+                fieldKind: .URL,
+                autocorrectionEnabled: true
+            )
+        )
+        XCTAssertNil(
+            KeyboardEditingRules.autocorrectionWord(
+                contextBefore: "teh",
+                fieldKind: .text,
+                autocorrectionEnabled: false
+            )
+        )
+        XCTAssertNil(
+            KeyboardEditingRules.autocorrectionWord(
+                contextBefore: "NASA",
+                fieldKind: .text,
+                autocorrectionEnabled: true
+            )
+        )
+    }
+
+    func testAutocorrectionPreservesTypedCapitalization() {
+        XCTAssertEqual(
+            KeyboardEditingRules.replacement("the", matchingCapitalizationOf: "Teh"),
+            "The"
+        )
+        XCTAssertEqual(
+            KeyboardEditingRules.replacement("The", matchingCapitalizationOf: "teh"),
+            "the"
+        )
+        XCTAssertNil(
+            KeyboardEditingRules.replacement("teh", matchingCapitalizationOf: "teh")
+        )
+    }
 }

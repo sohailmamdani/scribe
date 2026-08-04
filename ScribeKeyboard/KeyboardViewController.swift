@@ -24,6 +24,7 @@ final class KeyboardDocumentState: ObservableObject {
 final class KeyboardViewController: UIInputViewController {
     private var hostingController: UIHostingController<KeyboardRootView>?
     private let documentState = KeyboardDocumentState()
+    private let textChecker = UITextChecker()
     private var keyboardHeightConstraint: NSLayoutConstraint?
 
     override func viewDidLoad() {
@@ -33,6 +34,9 @@ final class KeyboardViewController: UIInputViewController {
             documentState: documentState,
             insertText: { [weak self] text in self?.textDocumentProxy.insertText(text) },
             deleteBackward: { [weak self] in self?.textDocumentProxy.deleteBackward() },
+            adjustTextPosition: { [weak self] offset in
+                self?.textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
+            },
             advanceInputMode: { [weak self] in self?.advanceToNextInputMode() },
             context: { [weak self] in
                 (self?.textDocumentProxy.documentContextBeforeInput,
@@ -45,6 +49,12 @@ final class KeyboardViewController: UIInputViewController {
                 Self.capitalizationMode(
                     for: self?.textDocumentProxy.autocapitalizationType ?? .sentences
                 )
+            },
+            autocorrectionEnabled: { [weak self] in
+                self?.textDocumentProxy.autocorrectionType != .no
+            },
+            correctionForWord: { [weak self] word in
+                self?.correction(for: word)
             },
             openContainingApp: { [weak self] url, completion in
                 guard let self else {
@@ -125,6 +135,27 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
         extensionContext.open(url, completionHandler: completion)
+    }
+
+    private func correction(for word: String) -> String? {
+        let language = textDocumentProxy.documentInputMode?.primaryLanguage ?? "en-US"
+        let range = NSRange(location: 0, length: (word as NSString).length)
+        let misspelledRange = textChecker.rangeOfMisspelledWord(
+            in: word,
+            range: range,
+            startingAt: 0,
+            wrap: false,
+            language: language
+        )
+        guard misspelledRange.location != NSNotFound,
+              misspelledRange.length == range.length else {
+            return nil
+        }
+        return textChecker.guesses(
+            forWordRange: range,
+            in: word,
+            language: language
+        )?.first
     }
 
     private static func fieldKind(for keyboardType: UIKeyboardType) -> KeyboardFieldKind {

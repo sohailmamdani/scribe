@@ -29,7 +29,7 @@ Both targets need the App Group enabled in the Apple Developer portal before ins
 
 ## Current product boundary
 
-The keyboard uses the same portrait key height, column width, control proportions, and spacing measured from the iOS 26 system keyboard on iPhone 17 Pro Max, with one additional native row pitch for permanent numbers. Common alternates are printed on the key caps and can be entered by a downward flick, press-and-hold selection, or a named VoiceOver action. Double-space period, automatic capitalization, hold-delete, and word swiping remain available.
+The keyboard uses the same portrait key height, column width, control proportions, and spacing measured from the iOS 26 system keyboard on iPhone 17 Pro Max, with one additional native row pitch for permanent numbers. Its requested extension height includes a dedicated gap between the dictation bar and number row so neither surface is compressed or allowed to touch. Common alternates are printed on the key caps and can be entered by a downward flick, press-and-hold selection, or a named VoiceOver action. Double-space period, automatic capitalization, host-trait-aware autocorrection, hold-delete, word swiping, and space-bar cursor mode remain available.
 
 ## TestFlight release
 

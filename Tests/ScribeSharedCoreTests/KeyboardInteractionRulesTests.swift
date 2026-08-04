@@ -44,8 +44,9 @@ final class KeyboardInteractionRulesTests: XCTestCase {
         XCTAssertEqual(geometry.homeRowInset(totalWidth: 440), 21.6, accuracy: 0.001)
         XCTAssertEqual(geometry.controlToLetterGap(totalWidth: 440), 14.8, accuracy: 0.001)
         XCTAssertEqual(geometry.numberRowPitch, 56)
-        XCTAssertEqual(geometry.contentHeight, 308)
-        XCTAssertEqual(geometry.extensionHeight, 313)
+        XCTAssertEqual(geometry.toolbarToKeyGap, 6)
+        XCTAssertEqual(geometry.contentHeight, 314)
+        XCTAssertEqual(geometry.extensionHeight, 319)
     }
 
 	func testCompactGeometryMatchesCapturedLandscapeSystemGrid() {
@@ -54,9 +55,17 @@ final class KeyboardInteractionRulesTests: XCTestCase {
 		XCTAssertEqual(geometry.homeRowInset(totalWidth: 724), 36.1, accuracy: 0.001)
 		XCTAssertEqual(geometry.controlToLetterGap(totalWidth: 724), 21.3, accuracy: 0.001)
 		XCTAssertEqual(geometry.numberRowPitch, 36)
-		XCTAssertEqual(geometry.contentHeight, 203)
-		XCTAssertEqual(geometry.extensionHeight, 206)
+		XCTAssertEqual(geometry.toolbarToKeyGap, 5)
+		XCTAssertEqual(geometry.contentHeight, 208)
+		XCTAssertEqual(geometry.extensionHeight, 211)
 	}
+
+    func testCursorTranslationUsesStableCharacterSteps() {
+        XCTAssertEqual(KeyboardCursorRules.characterOffset(forHorizontalTranslation: 11), 0)
+        XCTAssertEqual(KeyboardCursorRules.characterOffset(forHorizontalTranslation: 12), 1)
+        XCTAssertEqual(KeyboardCursorRules.characterOffset(forHorizontalTranslation: 29), 2)
+        XCTAssertEqual(KeyboardCursorRules.characterOffset(forHorizontalTranslation: -25), -2)
+    }
 
 	func testControlRowsFitAllSymbolCounts() {
 		let portrait = KeyboardGeometryRules.portrait

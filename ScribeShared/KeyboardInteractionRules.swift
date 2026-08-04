@@ -87,6 +87,7 @@ struct KeyboardGeometryRules: Equatable {
     let verticalGap: Double
     let outerInset: Double
     let toolbarHeight: Double
+    let toolbarToKeyGap: Double
     let controlWidth: Double
     let hostHeightAdjustment: Double
 
@@ -96,6 +97,7 @@ struct KeyboardGeometryRules: Equatable {
         verticalGap: 11,
         outerInset: 7,
         toolbarHeight: 39,
+        toolbarToKeyGap: 6,
         controlWidth: 50,
         hostHeightAdjustment: 5
     )
@@ -106,6 +108,7 @@ struct KeyboardGeometryRules: Equatable {
         verticalGap: 9,
         outerInset: 4,
         toolbarHeight: 32,
+        toolbarToKeyGap: 5,
         controlWidth: 87,
         hostHeightAdjustment: 3
     )
@@ -113,7 +116,9 @@ struct KeyboardGeometryRules: Equatable {
     var numberRowPitch: Double { keyHeight + verticalGap }
 
     // Toolbar plus number, QWERTY, home, bottom-letter, and control rows.
-    var contentHeight: Double { toolbarHeight + 5 * keyHeight + 4 * verticalGap }
+    var contentHeight: Double {
+        toolbarHeight + toolbarToKeyGap + 5 * keyHeight + 4 * verticalGap
+    }
     var extensionHeight: Double { contentHeight + hostHeightAdjustment }
 
     func tenColumnKeyWidth(totalWidth: Double) -> Double {
@@ -140,4 +145,12 @@ struct KeyboardGeometryRules: Equatable {
 			(available - 2 * controlWidth - gapCount * horizontalGap) / Double(characterCount)
 		)
 	}
+}
+
+enum KeyboardCursorRules {
+    static let pointsPerCharacter = 12.0
+
+    static func characterOffset(forHorizontalTranslation translation: Double) -> Int {
+        Int(translation / pointsPerCharacter)
+    }
 }
