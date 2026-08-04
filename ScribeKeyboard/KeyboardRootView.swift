@@ -10,20 +10,25 @@ enum KeyID: Hashable {
 }
 
 struct KeyboardRootView: View {
-    let hasFullAccess: Bool
-    let needsInputModeSwitchKey: Bool
+    @ObservedObject var documentState: KeyboardDocumentState
     let insertText: (String) -> Void
     let deleteBackward: () -> Void
     let advanceInputMode: () -> Void
     let context: () -> (String?, String?)
+    let fieldKind: () -> KeyboardFieldKind
+    let capitalizationMode: () -> KeyboardCapitalizationMode
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
 
     @Environment(\.openURL) private var openURL
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @StateObject private var state = KeyboardDictationState()
     @StateObject private var deleteRepeater = KeyRepeatEngine()
-    @State private var isShifted = true
+    @State private var shiftState: KeyboardShiftState = .once
     @State private var layout: KeyboardLayout = .letters
     @State private var lastInsertedText: String?
+    @State private var lastSpaceTapAt: Date?
+    @State private var lastShiftTapAt: Date?
+    @State private var observedFieldKind: KeyboardFieldKind?
 
     // Unified touch handling over the key area: frames are collected per key
     // so one drag gesture can drive taps, hold-to-repeat delete, and swipes.
@@ -43,34 +48,44 @@ struct KeyboardRootView: View {
         case symbols
     }
 
+    private var usesCompactMetrics: Bool { verticalSizeClass == .compact }
+    private var keyGap: CGFloat { usesCompactMetrics ? 4 : 7 }
+    private var letterKeyHeight: CGFloat { usesCompactMetrics ? 32 : 40 }
+    private var numberKeyHeight: CGFloat { usesCompactMetrics ? 28 : 34 }
+    private var bottomKeyHeight: CGFloat { usesCompactMetrics ? 32 : 40 }
+    private var dictationBarHeight: CGFloat { usesCompactMetrics ? 38 : 46 }
+
     var body: some View {
         Group {
             if state.phase == .recording || state.phase == .transcribing {
                 listeningPanel
             } else {
-                VStack(spacing: 5) {
+                VStack(spacing: keyGap) {
                     dictationBar
                     keyArea
-                    HStack(spacing: 6) {
-                        if needsInputModeSwitchKey {
+                    HStack(spacing: keyGap) {
+                        if documentState.needsInputModeSwitchKey {
                             bottomKey(systemName: "globe", width: 44) { advanceInputMode() }
                         }
                         bottomKey(title: layout == .letters ? "123" : "ABC", width: 48) {
                             layout = layout == .letters ? .numbers : .letters
-                            isShifted = layout == .letters
+                            if layout == .letters { refreshAutomaticShift() }
                         }
-                        bottomKey(title: "space", width: nil) { manualInsert(" ") }
-                        bottomKey(systemName: "return", width: 52) { manualInsert("\n") }
+                        bottomKey(title: "space", width: nil) { spaceTapped() }
+                        bottomKey(systemName: "return", width: 52) {
+                            manualInsert("\n")
+                        }
                     }
                 }
             }
         }
         .padding(.horizontal, 5)
-        .padding(.top, 5)
-        .padding(.bottom, 3)
+        .padding(.top, usesCompactMetrics ? 3 : 5)
+        .padding(.bottom, usesCompactMetrics ? 2 : 4)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(.systemGray5))
         .onAppear {
+            synchronizeDocumentState()
             state.start { transcript in
                 let surrounding = context()
                 let insertion = TranscriptPolisher.textForInsertion(
@@ -80,14 +95,19 @@ struct KeyboardRootView: View {
                 )
                 insertText(insertion)
                 lastInsertedText = insertion
+                refreshAutomaticShift()
             }
         }
-        .onDisappear { state.stop() }
-        .onChange(of: state.handoffFallbackNeeded) { _, needed in
-            guard needed else { return }
-            state.handoffFallbackNeeded = false
-            state.beginRecordingHandoff()
-            openScribe(path: "dictate")
+        .onChange(of: documentState.textRevision) { _, _ in
+            synchronizeDocumentState()
+        }
+        .onChange(of: documentState.selectionRevision) { _, _ in
+            lastSpaceTapAt = nil
+            synchronizeDocumentState()
+        }
+        .onDisappear {
+            state.stop()
+            cancelActiveTouch()
         }
     }
 
@@ -139,7 +159,7 @@ struct KeyboardRootView: View {
             }
             Spacer()
             HStack {
-                if needsInputModeSwitchKey {
+                if documentState.needsInputModeSwitchKey {
                     Button {
                         advanceInputMode()
                     } label: {
@@ -158,24 +178,30 @@ struct KeyboardRootView: View {
     // MARK: - Key area
 
     private var keyArea: some View {
-        VStack(spacing: 5) {
-            characterRow(activeRows[0])
-            characterRow(activeRows[1])
+        VStack(spacing: keyGap) {
+            characterRow(Array("1234567890"), keyHeight: numberKeyHeight, fontSize: 17)
+            characterRow(activeRows[0], keyHeight: letterKeyHeight)
+            characterRow(activeRows[1], keyHeight: letterKeyHeight)
                 .padding(.horizontal, 14)
-            HStack(spacing: 6) {
+            HStack(spacing: keyGap) {
                 if layout == .letters {
-                    keyCap(id: .shift, width: 44, emphasized: isShifted) {
-                        Image(systemName: "shift.fill")
+                    keyCap(
+                        id: .shift,
+                        width: 44,
+                        height: letterKeyHeight,
+                        emphasized: shiftState.usesUppercase
+                    ) {
+                        Image(systemName: shiftState == .locked ? "capslock.fill" : "shift.fill")
                             .font(.system(size: 17, weight: .medium))
                     }
                 } else {
-                    keyCap(id: .layoutToggle, width: 44) {
+                    keyCap(id: .layoutToggle, width: 44, height: letterKeyHeight) {
                         Text(layout == .numbers ? "#+=" : "123")
                             .font(.system(size: 15))
                     }
                 }
-                characterRow(activeRows[2])
-                keyCap(id: .delete, width: 44) {
+                characterRow(activeRows[2], keyHeight: letterKeyHeight)
+                keyCap(id: .delete, width: 44, height: letterKeyHeight) {
                     Image(systemName: "delete.left.fill")
                         .font(.system(size: 17, weight: .medium))
                 }
@@ -201,21 +227,30 @@ struct KeyboardRootView: View {
         case .letters:
             [Array("qwertyuiop"), Array("asdfghjkl"), Array("zxcvbnm")]
         case .numbers:
-            [Array("1234567890"), Array("-/:;()$&@\""), Array(".,?!'")]
+            [Array("-/:;()$&@\""), Array(".,?!'…"), Array("_\\|~<>€£¥")]
         case .symbols:
-            [Array("[]{}#%^*+="), Array("_\\|~<>€£¥"), Array(".,?!'")]
+            [Array("[]{}#%^*+="), Array("_\\|~<>€£¥"), Array(".,?!'…")]
         }
     }
 
-    private func characterRow(_ characters: [Character]) -> some View {
-        HStack(spacing: 5) {
+    private func characterRow(
+        _ characters: [Character],
+        keyHeight: CGFloat = 40,
+        fontSize: CGFloat = 21
+    ) -> some View {
+        HStack(spacing: keyGap) {
             ForEach(characters, id: \.self) { character in
-                let display = layout == .letters && isShifted
+                let display = layout == .letters && shiftState.usesUppercase && character.isLetter
                     ? String(character).uppercased()
                     : String(character)
-                keyCap(id: .character(character), width: nil, isCharacterKey: true) {
+                keyCap(
+                    id: .character(character),
+                    width: nil,
+                    height: keyHeight,
+                    isCharacterKey: true
+                ) {
                     Text(display)
-                        .font(.system(size: 21))
+                        .font(.system(size: fontSize))
                 }
             }
         }
@@ -224,6 +259,7 @@ struct KeyboardRootView: View {
     private func keyCap<Label: View>(
         id: KeyID,
         width: CGFloat?,
+        height: CGFloat = 40,
         emphasized: Bool = false,
         isCharacterKey: Bool = false,
         @ViewBuilder label: () -> Label
@@ -235,7 +271,7 @@ struct KeyboardRootView: View {
         return label()
             .foregroundStyle(.primary)
             .frame(maxWidth: width == nil ? .infinity : nil)
-            .frame(width: width, height: 41)
+            .frame(width: width, height: height)
             .background(
                 isPressed ? Color(.systemGray2) : baseColor,
                 in: RoundedRectangle(cornerRadius: 6)
@@ -249,6 +285,32 @@ struct KeyboardRootView: View {
                     )
                 }
             )
+            .accessibilityElement()
+            .accessibilityLabel(Text(accessibilityLabel(for: id)))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { activateFromAccessibility(id) }
+    }
+
+    private func accessibilityLabel(for id: KeyID) -> String {
+        switch id {
+        case .character(let character):
+            return String(character)
+        case .shift:
+            return shiftState == .locked ? "Caps Lock" : "Shift"
+        case .delete:
+            return "Delete"
+        case .layoutToggle:
+            return layout == .numbers ? "More Symbols" : "Numbers"
+        }
+    }
+
+    private func activateFromAccessibility(_ id: KeyID) {
+        KeyboardHaptics.keyDown()
+        if id == .delete {
+            manualDelete()
+        } else {
+            commitKey(id)
+        }
     }
 
     private func bottomKey(
@@ -269,7 +331,7 @@ struct KeyboardRootView: View {
             }
             .foregroundStyle(.primary)
             .frame(maxWidth: width == nil ? .infinity : nil)
-            .frame(width: width, height: 41)
+            .frame(width: width, height: bottomKeyHeight)
             .background(Color(.systemGray3), in: RoundedRectangle(cornerRadius: 6))
             .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
         }
@@ -328,14 +390,12 @@ struct KeyboardRootView: View {
         if case .character(let character)? = startKey,
            layout == .letters,
            character.isLetter,
-           hypot(point.x - start.x, point.y - start.y) > 24 {
+           hypot(point.x - start.x, point.y - start.y) > 24,
+           let current = letterKey(at: point),
+           current != character {
             isSwiping = true
             swipePoints = [start, point]
-            swipeKeys = []
-            if let first = letterKey(at: start) { swipeKeys.append(first) }
-            if let current = letterKey(at: point), current != swipeKeys.last {
-                swipeKeys.append(current)
-            }
+            swipeKeys = [character, current]
             return
         }
 
@@ -361,20 +421,60 @@ struct KeyboardRootView: View {
         }
 
         if isSwiping {
-            commitSwipe()
+            if Set(swipeKeys).count >= 2 {
+                commitSwipe()
+            } else if let startKey {
+                commitKey(startKey)
+            }
             return
         }
 
-        guard let key = key(at: point) else { return }
+        guard let startKey, let endingKey = key(at: point) else { return }
+        if startKey == .delete { return }
+
+        switch startKey {
+        case .character:
+            // Small drifts within the row are still the original key tap. A
+            // real slide only begins after entering a second distinct letter.
+            commitKey(startKey)
+        case .shift, .layoutToggle:
+            guard endingKey == startKey else { return }
+            commitKey(startKey)
+        case .delete:
+            break
+        }
+    }
+
+    private func cancelActiveTouch() {
+        deleteRepeater.stop()
+        touchStart = nil
+        startKey = nil
+        pressedKey = nil
+        isSwiping = false
+        swipePoints = []
+        swipeKeys = []
+    }
+
+    private func commitKey(_ key: KeyID) {
         switch key {
         case .character(let character):
-            let value = layout == .letters && isShifted
+            let value = layout == .letters && shiftState.usesUppercase && character.isLetter
                 ? String(character).uppercased()
                 : String(character)
             manualInsert(value)
-            if layout == .letters { isShifted = false }
+            if layout == .letters, character.isLetter, shiftState == .once {
+                shiftState = .off
+            }
         case .shift:
-            isShifted.toggle()
+            let now = Date()
+            if let lastShiftTapAt,
+               now.timeIntervalSince(lastShiftTapAt) <= 0.35 {
+                shiftState = .locked
+                self.lastShiftTapAt = nil
+            } else {
+                shiftState = shiftState == .off ? .once : .off
+                lastShiftTapAt = now
+            }
         case .layoutToggle:
             layout = layout == .numbers ? .symbols : .numbers
         case .delete:
@@ -397,13 +497,13 @@ struct KeyboardRootView: View {
             KeyboardHaptics.swipeFailed()
             return
         }
-        var text = isShifted ? word.prefix(1).uppercased() + word.dropFirst() : word
+        var text = shiftState.usesUppercase ? word.prefix(1).uppercased() + word.dropFirst() : word
         if let before = context().0, let lastCharacter = before.last,
            needsLeadingSpace(after: lastCharacter) {
             text = " " + text
         }
         manualInsert(text)
-        isShifted = false
+        if shiftState == .once { shiftState = .off }
         KeyboardHaptics.swipeCommit()
     }
 
@@ -443,18 +543,66 @@ struct KeyboardRootView: View {
 
     // MARK: - Text mutation
 
-    private func manualInsert(_ text: String) {
+    private func manualInsert(_ text: String, resetsSpaceTap: Bool = true) {
         lastInsertedText = nil
+        if resetsSpaceTap { lastSpaceTapAt = nil }
         insertText(text)
+        refreshAutomaticShift()
+    }
+
+    private func spaceTapped() {
+        let now = Date()
+        let elapsed = lastSpaceTapAt.map { now.timeIntervalSince($0) }
+        let before = context().0
+
+        if KeyboardEditingRules.shouldConvertDoubleSpace(
+            contextBefore: before,
+            elapsedSincePreviousSpace: elapsed,
+            fieldKind: fieldKind()
+        ) {
+            deleteBackward()
+            insertText(". ")
+            lastInsertedText = nil
+            lastSpaceTapAt = nil
+            refreshAutomaticShift()
+        } else {
+            manualInsert(" ", resetsSpaceTap: false)
+            lastSpaceTapAt = now
+        }
     }
 
     private func manualDelete() {
         lastInsertedText = nil
+        lastSpaceTapAt = nil
         deleteBackward()
+        refreshAutomaticShift()
+    }
+
+    private func synchronizeDocumentState() {
+        let currentFieldKind = fieldKind()
+        if observedFieldKind != currentFieldKind {
+            let previousFieldKind = observedFieldKind
+            observedFieldKind = currentFieldKind
+            if currentFieldKind == .number || currentFieldKind == .phone {
+                layout = .numbers
+            } else if previousFieldKind == .number || previousFieldKind == .phone {
+                layout = .letters
+            }
+        }
+        refreshAutomaticShift()
+    }
+
+    private func refreshAutomaticShift() {
+        guard layout == .letters, shiftState != .locked else { return }
+        shiftState = KeyboardEditingRules.automaticShiftState(
+            contextBefore: context().0,
+            capitalization: capitalizationMode()
+        )
     }
 
     private func deleteWordBackward() {
         lastInsertedText = nil
+        lastSpaceTapAt = nil
         let before = context().0 ?? ""
         var count = 0
         var index = before.endIndex
@@ -473,6 +621,7 @@ struct KeyboardRootView: View {
         for _ in 0..<max(count, 1) {
             deleteBackward()
         }
+        refreshAutomaticShift()
     }
 
     private func undoLastInsertion() {
@@ -487,6 +636,7 @@ struct KeyboardRootView: View {
             deleteBackward()
         }
         self.lastInsertedText = nil
+        refreshAutomaticShift()
     }
 
     // MARK: - Dictation bar
@@ -535,7 +685,7 @@ struct KeyboardRootView: View {
                 Image(systemName: state.sessionAlive ? "mic.badge.plus" : "lock.fill")
                     .font(.caption)
                     .foregroundStyle(.green)
-                Text(hasFullAccess
+                Text(documentState.hasFullAccess
                      ? (state.sessionAlive ? "Session live — instant dictation" : "On-device dictation")
                      : "Full Access required")
                     .font(.subheadline.weight(.medium))
@@ -558,52 +708,45 @@ struct KeyboardRootView: View {
             }
         }
         .padding(.horizontal, 12)
-        .frame(height: 46)
+        .frame(height: dictationBarHeight)
         .background(.background, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
     }
 
     private func beginDictation() {
-        guard hasFullAccess else {
+        guard documentState.hasFullAccess else {
             state.showFullAccessError()
             return
         }
         lastInsertedText = nil
-        if state.sessionAlive {
-            state.beginRemoteStart()
-        } else {
-            state.beginRecordingHandoff()
-            openScribe(path: "dictate")
-        }
+        let sessionWasAlive = state.sessionAlive
+        guard state.beginStart() else { return }
+        if !sessionWasAlive { openScribe() }
     }
 
     private func retryOrBeginDictation() {
-        guard hasFullAccess else {
+        guard documentState.hasFullAccess else {
             state.showFullAccessError()
             return
         }
 
         if state.retryAvailable {
-            if state.sessionAlive {
-                state.beginRetryRemote()
-            } else {
-                state.beginRetryHandoff()
-                openScribe(path: "retry")
-            }
+            let sessionWasAlive = state.sessionAlive
+            guard state.beginRetry() else { return }
+            if !sessionWasAlive { openScribe() }
         } else {
             beginDictation()
         }
     }
 
-    private func openScribe(path: String) {
-        guard let url = URL(string: "scribe://\(path)") else {
+    private func openScribe() {
+        guard let url = URL(string: "scribe://wake") else {
             state.handoffDidFail()
             return
         }
 
-        // SwiftUI's OpenURLAction is the only URL-opening mechanism that
-        // still works from keyboard extensions on iOS 18+. The legacy
-        // responder-chain / extensionContext paths remain as fallbacks for
-        // older systems.
+        // iOS does not publish a guaranteed keyboard-to-containing-app launch
+        // API. Keep this as one best-effort wake attempt; durable App Group
+        // state lets the request survive if the app has to be opened manually.
         openURL(url) { accepted in
             guard !accepted else { return }
             openContainingApp(url) { success in
@@ -688,13 +831,28 @@ final class KeyboardDictationState: NSObject, ObservableObject {
     @Published private(set) var audioLevel: Double = 0
     @Published private(set) var retryAvailable = false
     @Published private(set) var sessionAlive = false
-    @Published var handoffFallbackNeeded = false
 
     private let store = SharedDictationStore()
     private var timer: Timer?
-    private var lastResultID = ""
     private var onTranscript: ((String) -> Void)?
-    private var remoteStartIssuedAt: Date?
+    private var currentRequestID: String?
+    private var currentRequestIssuedAt: Date?
+    private var localError: String?
+
+    private static let acknowledgementTimeout: TimeInterval = 10
+    private static let coldStartTimeout: TimeInterval = 45
+    private static let transcriptionTimeout: TimeInterval = 5 * 60
+
+    private static func inFlightTimeout(for phase: DictationPhase) -> TimeInterval {
+        switch phase {
+        case .preparing:
+            coldStartTimeout
+        case .transcribing:
+            transcriptionTimeout
+        case .idle, .launching, .recording, .completed, .failed:
+            acknowledgementTimeout
+        }
+    }
 
     func start(onTranscript: @escaping (String) -> Void) {
         self.onTranscript = onTranscript
@@ -714,115 +872,180 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         timer = nil
     }
 
-    func beginRecordingHandoff() {
-        store.issue(.start)
-        store.phase = .launching
-        store.message = "Opening Scribe…"
-        refresh()
+    @discardableResult
+    func beginStart() -> Bool {
+        beginRequest(
+            .start,
+            initialPhase: sessionAlive ? .preparing : .launching,
+            message: sessionAlive ? "Starting the mic…" : "Opening Scribe…"
+        )
     }
 
-    /// Starts dictation through the live flow session — the backgrounded app
-    /// picks the command up from the shared store, so no app switch happens.
-    func beginRemoteStart() {
-        store.issue(.start)
-        store.phase = .preparing
-        store.message = "Starting the mic…"
-        remoteStartIssuedAt = Date()
-        refresh()
-    }
-
-    func beginRetryHandoff() {
-        store.issue(.retry)
-        store.phase = .preparing
-        store.message = "Retrying saved recording…"
-        refresh()
-    }
-
-    func beginRetryRemote() {
-        store.issue(.retry)
-        store.phase = .preparing
-        store.message = "Retrying saved recording…"
-        refresh()
+    @discardableResult
+    func beginRetry() -> Bool {
+        beginRequest(
+            .retry,
+            initialPhase: sessionAlive ? .preparing : .launching,
+            message: sessionAlive ? "Retrying saved recording…" : "Opening Scribe…"
+        )
     }
 
     func handoffDidFail() {
-        store.fail("Scribe couldn’t open. Tap Retry.", retryAvailable: store.retryAvailable)
-        refresh()
+        localError = "Scribe couldn’t open. Open the app once, then tap Retry."
+        phase = .failed
+        message = localError ?? ""
     }
 
     func cancelHandoff() {
-        store.reset()
-        refresh()
+        _ = beginRequest(.cancel, initialPhase: .idle, message: "")
+        currentRequestID = nil
+        currentRequestIssuedAt = nil
+        phase = .idle
+        message = ""
     }
 
-    /// Cancels an in-flight dictation: tells the app to drop the recording
-    /// and returns the keyboard to typing.
     func cancelDictation() {
-        store.issue(.cancel)
-        store.phase = .idle
-        store.message = ""
-        refresh()
+        _ = beginRequest(.cancel, initialPhase: .idle, message: "")
+        currentRequestID = nil
+        currentRequestIssuedAt = nil
+        phase = .idle
+        message = ""
     }
 
     func stopRecording() {
-        store.issue(.stop)
-        store.phase = .transcribing
-        store.message = "Polishing your words…"
-        refresh()
+        _ = beginRequest(.stop, initialPhase: .transcribing, message: "Polishing your words…")
     }
 
     func showFullAccessError() {
+        localError = "Enable Full Access in Settings to connect the keyboard to Scribe."
         phase = .failed
-        message = "Enable Full Access in Settings to connect the keyboard to Scribe."
+        message = localError ?? ""
     }
 
     private func refresh() {
-        phase = store.phase
-        message = store.message
-        audioLevel = store.audioLevel
-        retryAvailable = store.retryAvailable
-        let alive = store.isSessionAlive
-        if alive != sessionAlive { sessionAlive = alive }
-
-        // If a session-based start went unanswered, the session died without
-        // the keyboard noticing — fall back to opening the app.
-        if let issuedAt = remoteStartIssuedAt {
-            if phase == .recording {
-                remoteStartIssuedAt = nil
-            } else if Date().timeIntervalSince(issuedAt) > 4 {
-                remoteStartIssuedAt = nil
-                handoffFallbackNeeded = true
-            }
-        }
-
-        let age = Date().timeIntervalSince(store.updatedAt)
-        let heartbeatAge = Date().timeIntervalSince(store.sessionHeartbeat)
-        let isStale = switch phase {
-        case .recording: age > 10
-        // If the app were launching it would update the store within a
-        // couple of seconds, so a stale .launching means the open failed.
-        case .launching: age > 12
-        // With a session, a dead heartbeat means the app was killed mid-work.
-        case .preparing, .transcribing: age > 300 || (store.sessionActive && heartbeatAge > 10)
-        case .idle, .completed, .failed: false
-        }
-        if isStale {
-            let failureMessage = phase == .launching
-                ? "Scribe couldn’t open. Tap Retry."
-                : "Scribe stopped responding. Tap Retry to reconnect."
-            store.fail(failureMessage, retryAvailable: retryAvailable)
+        guard store.isAvailable else {
             phase = .failed
-            message = store.message
+            message = "Scribe’s shared container is unavailable. Reopen Scribe and try again."
+            retryAvailable = false
+            sessionAlive = false
             return
         }
 
-        let resultID = store.resultID
-        guard phase == .completed, !resultID.isEmpty, resultID != lastResultID else { return }
-        lastResultID = resultID
-        guard let transcript = store.consumeTranscript() else { return }
-        onTranscript?(transcript)
-        phase = .idle
-        message = ""
+        let status = store.status
+        let session = store.session
+        sessionAlive = session.isAlive()
+        audioLevel = store.audioLevel
+
+        let recoverableResultRequestID = currentRequestID ?? store.latestRequest?.id
+        if let claimed = store.claimTranscript(for: recoverableResultRequestID) {
+            onTranscript?(claimed.text)
+            currentRequestID = nil
+            currentRequestIssuedAt = nil
+            localError = nil
+            phase = .idle
+            message = ""
+            retryAvailable = false
+            return
+        }
+
+        if let currentRequestID {
+            if status.requestID == currentRequestID {
+                let age = Date().timeIntervalSince(status.updatedAt)
+                let timeout = Self.inFlightTimeout(for: status.phase)
+                if status.isInFlight, !sessionAlive, age > timeout {
+                    phase = .failed
+                    message = "Scribe stopped before finishing. Tap Retry to reconnect."
+                    retryAvailable = status.retryAvailable
+                    return
+                }
+                localError = nil
+                apply(status)
+                return
+            }
+
+            if let currentRequestIssuedAt,
+               Date().timeIntervalSince(currentRequestIssuedAt) > Self.acknowledgementTimeout {
+                phase = .failed
+                message = sessionAlive
+                    ? "The session stopped responding. Tap Retry to reconnect."
+                    : "Open Scribe once to start a session, then return and tap Retry."
+                retryAvailable = false
+            }
+			if let localError {
+				phase = .failed
+				message = localError
+			}
+            return
+        }
+
+		if let localError {
+			phase = .failed
+			message = localError
+			return
+		}
+
+        // When iOS recreates the extension, recover the app-owned in-flight
+        // state instead of assuming the old keyboard process is still alive.
+        if status.isInFlight {
+            let age = Date().timeIntervalSince(status.updatedAt)
+            let timeout = Self.inFlightTimeout(for: status.phase)
+            if !sessionAlive, age > timeout {
+                phase = .failed
+                message = "Scribe stopped before finishing. Tap Retry to reconnect."
+                retryAvailable = status.retryAvailable
+            } else if age < 15 * 60 {
+                apply(status)
+            }
+        } else if status.phase == .failed {
+            let age = Date().timeIntervalSince(status.updatedAt)
+            let matchesLatestRequest = status.requestID == store.latestRequest?.id
+            if matchesLatestRequest,
+               status.retryAvailable || (-60...15 * 60).contains(age) {
+                apply(status)
+            }
+        } else if status.phase == .completed, store.isResultConsumed(status.resultID) {
+            phase = .idle
+            message = ""
+            retryAvailable = false
+        } else if status.phase == .idle {
+            phase = .idle
+            message = ""
+            retryAvailable = false
+        }
+    }
+
+    @discardableResult
+    private func beginRequest(
+        _ command: DictationCommand,
+        initialPhase: DictationPhase,
+        message: String
+    ) -> Bool {
+        localError = nil
+        guard let request = store.issue(command) else {
+            phase = .failed
+            self.message = "Scribe’s shared container is unavailable. Reopen Scribe and try again."
+            return false
+        }
+        currentRequestID = request.id
+        currentRequestIssuedAt = request.issuedAt
+        phase = initialPhase
+        self.message = message
+        retryAvailable = false
+        return true
+    }
+
+    private func apply(_ status: DictationStatus) {
+        if status.phase == .completed, store.isResultConsumed(status.resultID) {
+            phase = .idle
+            message = ""
+            retryAvailable = false
+            currentRequestID = nil
+            currentRequestIssuedAt = nil
+            return
+        }
+        phase = status.phase
+        message = status.message
+        retryAvailable = status.retryAvailable
     }
 
     @objc private func refreshFromTimer() {

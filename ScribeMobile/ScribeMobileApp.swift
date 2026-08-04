@@ -12,12 +12,16 @@ struct ScribeMobileApp: App {
                     Task { await coordinator.handle(url: url) }
                 }
                 .task {
-                    await coordinator.prepareModel()
-                    await coordinator.handlePendingKeyboardCommand()
+                    // Claim and acknowledge the keyboard request before model
+                    // loading so a cold launch never looks like a lost tap.
+                    let handledKeyboardRequest = await coordinator.handlePendingKeyboardRequest()
+                    if !handledKeyboardRequest {
+                        await coordinator.prepareModel()
+                    }
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     guard newPhase == .active else { return }
-                    Task { await coordinator.handlePendingKeyboardCommand() }
+                    Task { _ = await coordinator.handlePendingKeyboardRequest() }
                 }
         }
     }

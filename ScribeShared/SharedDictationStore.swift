@@ -1,6 +1,6 @@
 import Foundation
 
-enum DictationPhase: String {
+enum DictationPhase: String, Codable, Sendable {
     case idle
     case launching
     case preparing
@@ -10,156 +10,317 @@ enum DictationPhase: String {
     case failed
 }
 
-enum DictationCommand: String {
-    case none
+enum DictationCommand: String, Codable, Sendable {
     case start
     case stop
     case cancel
     case retry
 }
 
+struct DictationRequest: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let command: DictationCommand
+    let issuedAt: Date
+
+    init(command: DictationCommand, id: String = UUID().uuidString, issuedAt: Date = Date()) {
+        self.id = id
+        self.command = command
+        self.issuedAt = issuedAt
+    }
+
+    func isFresh(at date: Date = Date(), maximumAge: TimeInterval = 5 * 60) -> Bool {
+        let age = date.timeIntervalSince(issuedAt)
+        return age >= -60 && age <= maximumAge
+    }
+}
+
+struct DictationStatus: Codable, Equatable, Sendable {
+    var requestID: String?
+    var processID: String?
+    var revision: Int
+    var phase: DictationPhase
+    var message: String
+    var retryAvailable: Bool
+    var updatedAt: Date
+    var resultID: String?
+    var transcript: String?
+
+    static let idle = DictationStatus(
+        requestID: nil,
+        processID: nil,
+        revision: 0,
+        phase: .idle,
+        message: "",
+        retryAvailable: false,
+        updatedAt: .distantPast,
+        resultID: nil,
+        transcript: nil
+    )
+
+    var isInFlight: Bool {
+        switch phase {
+        case .launching, .preparing, .recording, .transcribing:
+            true
+        case .idle, .completed, .failed:
+            false
+        }
+    }
+}
+
+struct DictationSession: Codable, Equatable, Sendable {
+    var processID: String?
+    var isActive: Bool
+    var heartbeat: Date
+    var expiresAt: Date
+
+    static let inactive = DictationSession(
+        processID: nil,
+        isActive: false,
+        heartbeat: .distantPast,
+        expiresAt: .distantPast
+    )
+
+    func isAlive(at date: Date = Date(), heartbeatTolerance: TimeInterval = 15) -> Bool {
+        isActive
+            && date < expiresAt
+            && date.timeIntervalSince(heartbeat) < heartbeatTolerance
+    }
+}
+
+struct ClaimedTranscript: Equatable, Sendable {
+    let resultID: String
+    let text: String
+}
+
+struct DictationRequestGate: Equatable, Sendable {
+    private(set) var lastClaimedRequestID: String?
+
+    init(lastClaimedRequestID: String? = nil) {
+        self.lastClaimedRequestID = lastClaimedRequestID
+    }
+
+    init(latestRequest: DictationRequest?, status: DictationStatus) {
+        lastClaimedRequestID = status.requestID == latestRequest?.id
+            ? latestRequest?.id
+            : nil
+    }
+
+    mutating func claim(_ request: DictationRequest) -> Bool {
+        guard request.id != lastClaimedRequestID else { return false }
+        lastClaimedRequestID = request.id
+        return true
+    }
+}
+
 /// The intentionally small IPC surface shared by the containing app and keyboard.
-/// Keyboard extensions cannot record audio, so the app performs the work and the
-/// extension only sends commands and consumes the final text.
-struct SharedDictationStore {
+///
+/// Requests, app-owned status, and session state are each encoded as one value so
+/// readers never observe half of a transition. Every request has a unique ID and
+/// every status acknowledges the request it belongs to, making duplicate URL,
+/// scene, and polling delivery harmless.
+struct SharedDictationStore: @unchecked Sendable {
     static let appGroupIdentifier = "group.sohail.Scribe"
 
     private enum Key {
-        static let phase = "dictation.phase"
-        static let command = "dictation.command"
-        static let transcript = "dictation.transcript"
-        static let resultID = "dictation.resultID"
-        static let message = "dictation.message"
-        static let audioLevel = "dictation.audioLevel"
-        static let retryAvailable = "dictation.retryAvailable"
-        static let updatedAt = "dictation.updatedAt"
-        static let sessionActive = "dictation.sessionActive"
-        static let sessionHeartbeat = "dictation.sessionHeartbeat"
-        static let sessionExpiresAt = "dictation.sessionExpiresAt"
+        static let request = "dictation.v2.request"
+        static let status = "dictation.v2.status"
+        static let session = "dictation.v2.session"
+        static let audioLevel = "dictation.v2.audioLevel"
+        static let consumedResultID = "dictation.v2.consumedResultID"
+        static let handledRequestID = "dictation.v2.handledRequestID"
     }
 
-    private let defaults: UserDefaults
+    private let defaults: UserDefaults?
 
-    init() {
-        defaults = UserDefaults(suiteName: Self.appGroupIdentifier) ?? .standard
+    init(defaults: UserDefaults? = UserDefaults(suiteName: SharedDictationStore.appGroupIdentifier)) {
+        self.defaults = defaults
     }
 
-    var phase: DictationPhase {
-        get { DictationPhase(rawValue: defaults.string(forKey: Key.phase) ?? "") ?? .idle }
-        nonmutating set {
-            defaults.set(newValue.rawValue, forKey: Key.phase)
-            touch()
-        }
+    var isAvailable: Bool { defaults != nil }
+
+    var latestRequest: DictationRequest? {
+        read(DictationRequest.self, forKey: Key.request)
     }
 
-    var message: String {
-        get { defaults.string(forKey: Key.message) ?? "" }
-        nonmutating set {
-            defaults.set(newValue, forKey: Key.message)
-            touch()
-        }
+    var status: DictationStatus {
+        read(DictationStatus.self, forKey: Key.status) ?? .idle
+    }
+
+    var session: DictationSession {
+        read(DictationSession.self, forKey: Key.session) ?? .inactive
     }
 
     var audioLevel: Double {
-        get { defaults.double(forKey: Key.audioLevel) }
-        nonmutating set { defaults.set(max(0, min(newValue, 1)), forKey: Key.audioLevel) }
+        get { defaults?.double(forKey: Key.audioLevel) ?? 0 }
+        nonmutating set { defaults?.set(max(0, min(newValue, 1)), forKey: Key.audioLevel) }
     }
 
-    var resultID: String {
-        defaults.string(forKey: Key.resultID) ?? ""
+    var lastHandledRequestID: String? {
+        defaults?.string(forKey: Key.handledRequestID)
     }
 
-    var retryAvailable: Bool {
-        get { defaults.bool(forKey: Key.retryAvailable) }
-        nonmutating set {
-            defaults.set(newValue, forKey: Key.retryAvailable)
-            touch()
+    @discardableResult
+    func issue(_ command: DictationCommand, at date: Date = Date()) -> DictationRequest? {
+        guard defaults != nil else { return nil }
+        let request = DictationRequest(command: command, issuedAt: date)
+        write(request, forKey: Key.request)
+        return request
+    }
+
+    func markRequestHandled(_ requestID: String) {
+        defaults?.set(requestID, forKey: Key.handledRequestID)
+    }
+
+    func publishStatus(
+        for requestID: String?,
+        processID: String,
+        phase: DictationPhase,
+        message: String,
+        retryAvailable: Bool = false,
+        at date: Date = Date()
+    ) {
+        guard defaults != nil else { return }
+        let previous = status
+        let keepResult = previous.requestID == requestID && phase == .completed
+        let next = DictationStatus(
+            requestID: requestID,
+            processID: processID,
+            revision: previous.revision + 1,
+            phase: phase,
+            message: message,
+            retryAvailable: retryAvailable,
+            updatedAt: date,
+            resultID: keepResult ? previous.resultID : nil,
+            transcript: keepResult ? previous.transcript : nil
+        )
+        write(next, forKey: Key.status)
+    }
+
+    func publish(
+        transcript: String,
+        for requestID: String?,
+        processID: String,
+        at date: Date = Date()
+    ) {
+        guard defaults != nil else { return }
+        let next = DictationStatus(
+            requestID: requestID,
+            processID: processID,
+            revision: status.revision + 1,
+            phase: .completed,
+            message: "Ready to insert",
+            retryAvailable: false,
+            updatedAt: date,
+            resultID: UUID().uuidString,
+            transcript: transcript
+        )
+        write(next, forKey: Key.status)
+    }
+
+    func fail(
+        _ errorMessage: String,
+        for requestID: String?,
+        processID: String,
+        retryAvailable: Bool = false,
+        at date: Date = Date()
+    ) {
+        publishStatus(
+            for: requestID,
+            processID: processID,
+            phase: .failed,
+            message: errorMessage,
+            retryAvailable: retryAvailable,
+            at: date
+        )
+    }
+
+    func reset(for requestID: String?, processID: String, at date: Date = Date()) {
+        publishStatus(
+            for: requestID,
+            processID: processID,
+            phase: .idle,
+            message: "",
+            at: date
+        )
+        defaults?.set(0, forKey: Key.audioLevel)
+    }
+
+    /// Claims a result before insertion so extension recreation cannot paste it twice.
+    /// The request/status remains available for diagnostics; only the result ID is acked.
+    func claimTranscript(
+        for requestID: String?,
+        at date: Date = Date(),
+        maximumAge: TimeInterval = 15 * 60
+    ) -> ClaimedTranscript? {
+        let current = status
+        let age = date.timeIntervalSince(current.updatedAt)
+        guard let requestID,
+              current.requestID == requestID,
+              current.phase == .completed,
+              age >= -60,
+              age <= maximumAge,
+              let resultID = current.resultID,
+              let transcript = current.transcript,
+              !transcript.isEmpty,
+              defaults?.string(forKey: Key.consumedResultID) != resultID else {
+            return nil
         }
+        defaults?.set(resultID, forKey: Key.consumedResultID)
+        return ClaimedTranscript(resultID: resultID, text: transcript)
     }
 
-    var updatedAt: Date {
-        defaults.object(forKey: Key.updatedAt) as? Date ?? .distantPast
+    func isResultConsumed(_ resultID: String?) -> Bool {
+        guard let resultID else { return false }
+        return defaults?.string(forKey: Key.consumedResultID) == resultID
     }
 
-    // MARK: - Flow session
-
-    /// While a flow session is active the app keeps the microphone alive in
-    /// the background, so the keyboard can start dictation with a command
-    /// instead of opening the app. Written only by the app.
-
-    var sessionActive: Bool {
-        get { defaults.bool(forKey: Key.sessionActive) }
-        nonmutating set { defaults.set(newValue, forKey: Key.sessionActive) }
+    func beginSession(processID: String, expiresAt: Date, at date: Date = Date()) {
+        write(
+            DictationSession(
+                processID: processID,
+                isActive: true,
+                heartbeat: date,
+                expiresAt: expiresAt
+            ),
+            forKey: Key.session
+        )
     }
 
-    var sessionHeartbeat: Date {
-        get { defaults.object(forKey: Key.sessionHeartbeat) as? Date ?? .distantPast }
-        nonmutating set { defaults.set(newValue, forKey: Key.sessionHeartbeat) }
+    func refreshSessionHeartbeat(processID: String, at date: Date = Date()) {
+        var current = session
+        guard current.isActive, current.processID == processID else { return }
+        current.heartbeat = date
+        write(current, forKey: Key.session)
     }
 
-    var sessionExpiresAt: Date {
-        get { defaults.object(forKey: Key.sessionExpiresAt) as? Date ?? .distantPast }
-        nonmutating set { defaults.set(newValue, forKey: Key.sessionExpiresAt) }
+    func extendSession(processID: String, expiresAt: Date, at date: Date = Date()) {
+        var current = session
+        guard current.processID == processID else {
+            beginSession(processID: processID, expiresAt: expiresAt, at: date)
+            return
+        }
+        current.isActive = true
+        current.heartbeat = date
+        current.expiresAt = expiresAt
+        write(current, forKey: Key.session)
     }
 
-    /// True when the app's session heartbeat is fresh enough for the keyboard
-    /// to trust that a start command will be picked up promptly.
-    var isSessionAlive: Bool {
-        sessionActive
-            && Date() < sessionExpiresAt
-            && Date().timeIntervalSince(sessionHeartbeat) < 5
+    func endSession(processID: String? = nil) {
+        var current = session
+        if let processID, current.processID != processID { return }
+        current.isActive = false
+        current.heartbeat = .distantPast
+        current.expiresAt = .distantPast
+        write(current, forKey: Key.session)
     }
 
-    func endSession() {
-        defaults.set(false, forKey: Key.sessionActive)
+    private func read<Value: Decodable>(_ type: Value.Type, forKey key: String) -> Value? {
+        guard let data = defaults?.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
     }
 
-    func issue(_ command: DictationCommand) {
-        defaults.set(command.rawValue, forKey: Key.command)
-        touch()
-    }
-
-    func consumeCommand() -> DictationCommand {
-        let command = DictationCommand(rawValue: defaults.string(forKey: Key.command) ?? "") ?? .none
-        defaults.set(DictationCommand.none.rawValue, forKey: Key.command)
-        return command
-    }
-
-    func publish(transcript: String) {
-        defaults.set(transcript, forKey: Key.transcript)
-        defaults.set(UUID().uuidString, forKey: Key.resultID)
-        defaults.set(DictationPhase.completed.rawValue, forKey: Key.phase)
-        defaults.set("Ready to insert", forKey: Key.message)
-        defaults.set(false, forKey: Key.retryAvailable)
-        touch()
-    }
-
-    func consumeTranscript() -> String? {
-        guard let text = defaults.string(forKey: Key.transcript), !text.isEmpty else { return nil }
-        defaults.removeObject(forKey: Key.transcript)
-        defaults.set(DictationPhase.idle.rawValue, forKey: Key.phase)
-        defaults.set("", forKey: Key.message)
-        touch()
-        return text
-    }
-
-    func fail(_ errorMessage: String, retryAvailable: Bool = false) {
-        defaults.set(errorMessage, forKey: Key.message)
-        defaults.set(DictationPhase.failed.rawValue, forKey: Key.phase)
-        defaults.set(retryAvailable, forKey: Key.retryAvailable)
-        touch()
-    }
-
-    func reset() {
-        defaults.set(DictationPhase.idle.rawValue, forKey: Key.phase)
-        defaults.set(DictationCommand.none.rawValue, forKey: Key.command)
-        defaults.set("", forKey: Key.message)
-        defaults.set(0, forKey: Key.audioLevel)
-        defaults.set(false, forKey: Key.retryAvailable)
-        touch()
-    }
-
-    private func touch() {
-        defaults.set(Date(), forKey: Key.updatedAt)
+    private func write<Value: Encodable>(_ value: Value, forKey key: String) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        defaults?.set(data, forKey: key)
     }
 }
