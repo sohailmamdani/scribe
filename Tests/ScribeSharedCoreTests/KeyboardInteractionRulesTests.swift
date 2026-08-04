@@ -86,6 +86,51 @@ final class KeyboardInteractionRulesTests: XCTestCase {
 		)
 	}
 
+    /// The bottom letter row used to need 324 pt of a 306 pt space on a 320 pt
+    /// iPhone, because Shift and Delete were a hard 50 pt at every width.
+    func testBottomLetterRowFitsAtEveryCommonWidth() {
+        let portraitWidths = [320.0, 375, 390, 393, 402, 430, 440]
+        for width in portraitWidths {
+            let available = width - 2 * KeyboardGeometryRules.portrait.outerInset
+            XCTAssertLessThanOrEqual(
+                KeyboardGeometryRules.portrait.letterControlRowWidth(totalWidth: width),
+                available + 0.001,
+                "portrait row overflows at \(width) pt"
+            )
+        }
+
+        let landscapeWidths = [568.0, 667, 736, 844, 852, 932, 956]
+        for width in landscapeWidths {
+            let available = width - 2 * KeyboardGeometryRules.compact.outerInset
+            XCTAssertLessThanOrEqual(
+                KeyboardGeometryRules.compact.letterControlRowWidth(totalWidth: width),
+                available + 0.001,
+                "landscape row overflows at \(width) pt"
+            )
+        }
+    }
+
+    /// Roomy screens keep the design-reviewed proportions exactly.
+    func testWideScreensKeepThePreferredControlWidth() {
+        XCTAssertEqual(
+            KeyboardGeometryRules.portrait.controlWidth(totalWidth: 440),
+            KeyboardGeometryRules.portrait.preferredControlWidth
+        )
+        XCTAssertEqual(
+            KeyboardGeometryRules.compact.controlWidth(totalWidth: 956),
+            KeyboardGeometryRules.compact.preferredControlWidth
+        )
+    }
+
+    func testNarrowScreensShrinkTheControlKeys() {
+        let narrow = KeyboardGeometryRules.portrait.controlWidth(totalWidth: 320)
+        XCTAssertLessThan(narrow, KeyboardGeometryRules.portrait.preferredControlWidth)
+        XCTAssertGreaterThanOrEqual(
+            narrow,
+            KeyboardGeometryRules.minimumControlWidth
+        )
+    }
+
     private func resolve(
         x: Double,
         y: Double,

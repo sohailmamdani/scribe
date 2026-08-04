@@ -19,7 +19,7 @@ struct KeyboardRootView: View {
     let fieldKind: () -> KeyboardFieldKind
     let capitalizationMode: () -> KeyboardCapitalizationMode
     let autocorrectionEnabled: () -> Bool
-    let correctionsForWord: (String, String?) -> [KeyboardCorrection]
+    let correctionsForWord: (String, String?, [KeyboardTapEvidence]) async -> [KeyboardCorrection]
     let recordAcceptedCorrection: (String, String) -> Void
     let recordRejectedCorrection: (String, String) -> Void
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
@@ -37,10 +37,21 @@ struct KeyboardRootView: View {
 	@State private var correctionCandidates: [KeyboardCorrection] = []
 	@State private var appliedCorrection: AppliedCorrection?
 	@State private var localMutationGraceDeadline = Date.distantPast
+	/// Corrections are computed off the main thread, so the delimiter path reads
+	/// this precomputed answer instead of blocking to produce one.
+	@State private var pendingCorrection: PendingCorrection?
+	@State private var correctionTask: Task<Void, Never>?
+	/// Where the finger actually landed for each character of the word being
+	/// typed, feeding spatial scoring in the correction engine.
+	@State private var tapEvidence: [KeyboardTapEvidence] = []
 
     // Unified touch handling over the key area: frames are collected per key
     // so one drag gesture can drive taps, hold-to-repeat delete, and swipes.
     @State private var keyFrames: [KeyID: CGRect] = [:]
+    /// Gap-free touch regions derived from `keyFrames`. Hit-testing uses these;
+    /// `keyFrames` remains the visual truth for drawing and gesture geometry.
+    @State private var hitRegions: [KeyID: CGRect] = [:]
+    @State private var keyAreaBounds: CGRect = .zero
     @State private var pressedKey: KeyID?
     @State private var touchStart: CGPoint?
     @State private var startKey: KeyID?
@@ -78,6 +89,11 @@ struct KeyboardRootView: View {
         let original: String
         let replacement: String
         let suffix: String
+    }
+
+    private struct PendingCorrection: Equatable {
+        let word: String
+        let candidates: [KeyboardCorrection]
     }
 
     private var usesCompactMetrics: Bool { verticalSizeClass == .compact }
@@ -120,6 +136,8 @@ struct KeyboardRootView: View {
                 )
 				proxyInsertText(insertion)
                 lastInsertedText = insertion
+                // Dictated text arrives with no taps behind it.
+                tapEvidence = []
                 refreshAutomaticShift()
             }
         }
@@ -132,12 +150,17 @@ struct KeyboardRootView: View {
 			// repeat and erases the first-space timestamp before a double-space.
 			if Date() > localMutationGraceDeadline {
 				lastSpaceTapAt = nil
+				// The caret moved for a reason the keyboard did not cause, so
+				// the recorded taps no longer describe the word at the caret.
+				tapEvidence = []
 				cancelActiveTouch()
 			}
             synchronizeDocumentState()
         }
         .onDisappear {
             state.stop()
+            correctionTask?.cancel()
+            correctionTask = nil
             cancelActiveTouch()
             cancelSpaceGesture()
         }
@@ -215,6 +238,7 @@ struct KeyboardRootView: View {
             let characterWidth = CGFloat(geometry.tenColumnKeyWidth(totalWidth: totalWidth))
             let homeInset = CGFloat(geometry.homeRowInset(totalWidth: totalWidth))
             let controlGap = CGFloat(geometry.controlToLetterGap(totalWidth: totalWidth))
+            let controlWidth = CGFloat(geometry.controlWidth(totalWidth: totalWidth))
 			let thirdRowCharacters = activeRows[2]
 			let fittedThirdRowWidth = CGFloat(
 				geometry.fittedControlRowKeyWidth(
@@ -231,7 +255,7 @@ struct KeyboardRootView: View {
 					HStack(spacing: 0) {
 						keyCap(
 							id: .shift,
-							width: geometry.controlWidth,
+							width: controlWidth,
 							height: keyHeight,
 							emphasized: shiftState.usesUppercase
 						) {
@@ -241,19 +265,19 @@ struct KeyboardRootView: View {
 						Spacer().frame(width: controlGap)
 						characterRow(thirdRowCharacters, width: characterWidth)
 						Spacer().frame(width: controlGap)
-						keyCap(id: .delete, width: geometry.controlWidth, height: keyHeight) {
+						keyCap(id: .delete, width: controlWidth, height: keyHeight) {
 							Image(systemName: "delete.left.fill")
 								.font(.system(size: 18, weight: .medium))
 						}
 					}
 				} else {
 					HStack(spacing: horizontalGap) {
-						keyCap(id: .layoutToggle, width: geometry.controlWidth, height: keyHeight) {
+						keyCap(id: .layoutToggle, width: controlWidth, height: keyHeight) {
 							Text(layout == .numbers ? "#+=" : "123")
 								.font(.system(size: 15))
 						}
 						characterRow(thirdRowCharacters, width: fittedThirdRowWidth)
-						keyCap(id: .delete, width: geometry.controlWidth, height: keyHeight) {
+						keyCap(id: .delete, width: controlWidth, height: keyHeight) {
 							Image(systemName: "delete.left.fill")
 								.font(.system(size: 18, weight: .medium))
 						}
@@ -261,10 +285,21 @@ struct KeyboardRootView: View {
 				}
             }
             .padding(.horizontal, outerInset)
+            .preference(
+                key: KeyAreaBoundsKey.self,
+                value: CGRect(origin: .zero, size: proxy.size)
+            )
         }
         .frame(height: 3 * keyHeight + 2 * verticalGap)
         .coordinateSpace(name: Self.keySpace)
-        .onPreferenceChange(KeyFramesKey.self) { keyFrames = $0 }
+        .onPreferenceChange(KeyFramesKey.self) { frames in
+            keyFrames = frames
+            updateHitRegions()
+        }
+        .onPreferenceChange(KeyAreaBoundsKey.self) { bounds in
+            keyAreaBounds = bounds
+            updateHitRegions()
+        }
         .contentShape(Rectangle())
         .gesture(keyDragGesture)
         .overlay {
@@ -275,6 +310,73 @@ struct KeyboardRootView: View {
                 )
                 .opacity(touchMode == .swiping ? 1 : 0)
                 .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) { keyPreview }
+    }
+
+    private func updateHitRegions() {
+        hitRegions = KeyboardHitGrid.regions(
+            forFrames: keyFrames,
+            in: keyAreaBounds
+        )
+    }
+
+    // MARK: - Key preview
+    //
+    // The enlarged glyph above the finger is the feedback loop that lets a
+    // typist notice and correct a slip before lifting off. Without it a custom
+    // keyboard reads as imprecise even when the hit-testing is exact.
+
+    @ViewBuilder
+    private var keyPreview: some View {
+        if let previewedKey, let frame = keyFrames[previewedKey] {
+            let width = frame.width * 1.42
+            let height = keyHeight * 1.34
+            let minX = keyAreaBounds.minX
+            let maxX = max(minX, keyAreaBounds.maxX - width)
+            let x = min(max(frame.midX - width / 2, minX), maxX)
+
+            Text(previewedGlyph)
+                .font(.system(size: 30))
+                .foregroundStyle(.primary)
+                .frame(width: width, height: height)
+                .background(
+                    Color(.systemBackground),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
+                .offset(x: x, y: frame.minY - height - 5)
+                .allowsHitTesting(false)
+                .transaction { $0.animation = nil }
+        }
+    }
+
+    /// Only character keys preview, matching iOS — controls stay quiet, and
+    /// landscape suppresses the popup because there is no room above the row.
+    /// It tracks the key the touch began on, which is the key that commits.
+    private var previewedKey: KeyID? {
+        guard !usesCompactMetrics,
+              let startKey,
+              case .character = startKey else { return nil }
+        switch touchMode {
+        case .pressed, .alternatePreview, .alternateCommitted, .alternatePalette:
+            return startKey
+        case .idle, .control, .deleting, .swiping:
+            return nil
+        }
+    }
+
+    private var previewedGlyph: String {
+        guard case .character(let character)? = previewedKey else { return "" }
+        switch touchMode {
+        case .alternatePreview(let alternate),
+             .alternateCommitted(let alternate),
+             .alternatePalette(let alternate):
+            return String(alternate)
+        case .idle, .pressed, .control, .deleting, .swiping:
+            return layout == .letters && shiftState.usesUppercase && character.isLetter
+                ? String(character).uppercased()
+                : String(character)
         }
     }
 
@@ -685,9 +787,17 @@ struct KeyboardRootView: View {
             return
         }
 
-        if touchMode == .control {
+        switch touchMode {
+        case .control:
             pressedKey = key(at: point) == startKey ? startKey : nil
-        } else {
+        case .pressed:
+            // A character key commits the key the touch began on, however far
+            // the finger drifts. The highlight has to say so: following the
+            // finger onto a neighbour that will not be typed is what makes a
+            // deliberate press feel like a mistype.
+            pressedKey = startKey
+        case .idle, .deleting, .alternatePreview, .alternateCommitted,
+             .alternatePalette, .swiping:
             pressedKey = key(at: point)
         }
     }
@@ -710,7 +820,7 @@ struct KeyboardRootView: View {
             if Set(swipeKeys).count >= 2 {
                 commitSwipe()
             } else if let startKey {
-                commitKey(startKey)
+                commitKey(startKey, at: touchStart)
             }
             return
         }
@@ -769,7 +879,9 @@ struct KeyboardRootView: View {
         case .character:
             // Small drifts within the row are still the original key tap. A
             // real slide only begins after entering a second distinct letter.
-            commitKey(startKey)
+            // Scoring uses the touch-down point: that is where the user aimed,
+            // before any drift while lifting off.
+            commitKey(startKey, at: touchStart)
         case .shift, .layoutToggle:
             guard key(at: point) == startKey else { return }
             commitKey(startKey)
@@ -817,7 +929,7 @@ struct KeyboardRootView: View {
         pressedKey = .character(current)
     }
 
-    private func commitKey(_ key: KeyID) {
+    private func commitKey(_ key: KeyID, at point: CGPoint? = nil) {
         switch key {
         case .character(let character):
             let value = layout == .letters && shiftState.usesUppercase && character.isLetter
@@ -826,7 +938,12 @@ struct KeyboardRootView: View {
             if ".,!?;:".contains(character) {
                 insertDelimiter(value)
             } else {
-                manualInsert(value)
+                manualInsert(
+                    value,
+                    evidence: character.isLetter
+                        ? tapEvidence(for: character, at: point)
+                        : nil
+                )
             }
             if layout == .letters, character.isLetter, shiftState == .once {
                 shiftState = .off
@@ -889,33 +1006,63 @@ struct KeyboardRootView: View {
         return !"([{\"'“‘@#$/_-–—".contains(character)
     }
 
+    private var verticalTapBias: Double {
+        usesCompactMetrics
+            ? KeyboardHitGrid.compactVerticalTapBias
+            : KeyboardHitGrid.portraitVerticalTapBias
+    }
+
     private func key(at point: CGPoint) -> KeyID? {
-        if let hit = keyFrames.first(where: { $0.value.contains(point) }) {
-            return hit.key
-        }
-        let nearest = keyFrames.min { lhs, rhs in
-            distance(from: lhs.value, to: point) < distance(from: rhs.value, to: point)
-        }
-        guard let nearest, distance(from: nearest.value, to: point) < 30 else { return nil }
-        return nearest.key
+        KeyboardHitGrid.key(
+            at: point,
+            regions: hitRegions,
+            verticalTapBias: verticalTapBias
+        )
     }
 
     private func letterKey(at point: CGPoint) -> Character? {
-        guard layout == .letters else { return nil }
-        var best: (letter: Character, distance: CGFloat)?
-        for (id, frame) in keyFrames {
-            guard case .character(let character) = id, character.isLetter else { continue }
-            let d = distance(from: frame, to: point)
-            if best == nil || d < best!.distance {
-                best = (character, d)
-            }
-        }
-        guard let best, best.distance < 40 else { return nil }
-        return best.letter
+        guard layout == .letters,
+              case .character(let character)? = key(at: point),
+              character.isLetter else { return nil }
+        return character
     }
 
-    private func distance(from frame: CGRect, to point: CGPoint) -> CGFloat {
-        hypot(frame.midX - point.x, frame.midY - point.y)
+    /// Records where the finger landed relative to every nearby letter, so the
+    /// correction engine can tell a slip from a spelling mistake. Horizontal
+    /// distance is scaled by key width and vertical by row pitch, which makes
+    /// an adjacent key roughly one unit away in either direction.
+    /// Returns nil when there is no touch to learn from — a VoiceOver
+    /// activation, or a non-letter layout. Callers drop the trail rather than
+    /// recording a blank entry, which would otherwise make every substitution
+    /// at that position look implausible.
+    private func tapEvidence(for character: Character, at point: CGPoint?) -> KeyboardTapEvidence? {
+        guard let point, layout == .letters else { return nil }
+        let rowPitch = keyHeight + verticalGap
+        var normalizedDistances: [Character: Double] = [:]
+        for (id, frame) in keyFrames {
+            guard case .character(let other) = id, other.isLetter else { continue }
+            let dx = (point.x - frame.midX) / max(frame.width, 1)
+            let dy = (point.y - frame.midY) / max(rowPitch, 1)
+            let normalized = Double(hypot(dx, dy))
+            guard normalized <= 2 else { continue }
+            normalizedDistances[other] = normalized
+        }
+        return KeyboardTapEvidence(
+            character: character,
+            normalizedDistances: normalizedDistances
+        )
+    }
+
+    /// Evidence is only handed to the engine when it still lines up character
+    /// for character with the word in the field. Anything that edited the text
+    /// behind the keyboard's back drops it rather than misaligning it.
+    private func evidence(matching word: String) -> [KeyboardTapEvidence] {
+        let characters = Array(word.lowercased())
+        guard tapEvidence.count == characters.count,
+              zip(tapEvidence, characters).allSatisfy({ $0.character == $1 }) else {
+            return []
+        }
+        return tapEvidence
     }
 
     // MARK: - Text mutation
@@ -923,11 +1070,21 @@ struct KeyboardRootView: View {
     private func manualInsert(
         _ text: String,
         resetsSpaceTap: Bool = true,
-        clearsAutocorrection: Bool = true
+        clearsAutocorrection: Bool = true,
+        evidence newEvidence: KeyboardTapEvidence? = nil
     ) {
         lastInsertedText = nil
         if clearsAutocorrection { appliedCorrection = nil }
         if resetsSpaceTap { lastSpaceTapAt = nil }
+        // A letter tap extends the evidence for the word in progress. Anything
+        // else — a symbol, a swiped word, a flick alternate — has no per
+        // character touch behind it, so the trail is dropped rather than
+        // allowed to fall out of step with the text.
+        if let newEvidence {
+            tapEvidence.append(newEvidence)
+        } else {
+            tapEvidence = []
+        }
 		proxyInsertText(text)
         refreshAutomaticShift()
         scheduleCorrectionRefresh()
@@ -948,6 +1105,9 @@ struct KeyboardRootView: View {
         adjustTextPosition(offset)
     }
 
+    /// Reads the correction computed in the background while the user was still
+    /// typing. Staying synchronous here keeps the delete-and-reinsert atomic
+    /// with the delimiter that triggered it.
     @discardableResult
     private func applyAutocorrectionIfNeeded() -> AppliedCorrection? {
         guard let word = KeyboardEditingRules.autocorrectionWord(
@@ -955,11 +1115,11 @@ struct KeyboardRootView: View {
             fieldKind: fieldKind(),
             autocorrectionEnabled: autocorrectionEnabled()
         ),
-              let suggestion = correctionsForWord(word, context().0).first(where: \.automaticallyReplaces),
-              let replacement = KeyboardEditingRules.replacement(
-                suggestion.text,
-                matchingCapitalizationOf: word
-              ) else {
+              let pending = pendingCorrection,
+              pending.word == word,
+              let replacement = pending.candidates
+                .first(where: \.automaticallyReplaces)?
+                .text else {
             return nil
         }
 
@@ -967,6 +1127,8 @@ struct KeyboardRootView: View {
         proxyInsertText(replacement)
         lastInsertedText = nil
         correctionCandidates = []
+        pendingCorrection = nil
+        tapEvidence = []
         return AppliedCorrection(
             original: word,
             replacement: replacement,
@@ -1006,6 +1168,7 @@ struct KeyboardRootView: View {
             lastInsertedText = nil
             appliedCorrection = nil
             lastSpaceTapAt = nil
+            tapEvidence = []
             refreshAutomaticShift()
             scheduleCorrectionRefresh()
         } else {
@@ -1018,6 +1181,7 @@ struct KeyboardRootView: View {
         lastInsertedText = nil
         appliedCorrection = nil
         lastSpaceTapAt = nil
+        if !tapEvidence.isEmpty { tapEvidence.removeLast() }
 		proxyDeleteBackward()
         refreshAutomaticShift()
         scheduleCorrectionRefresh()
@@ -1039,20 +1203,34 @@ struct KeyboardRootView: View {
             }
         }
         refreshAutomaticShift()
-        refreshCorrectionCandidates()
+        scheduleCorrectionRefresh()
     }
 
-    private func refreshCorrectionCandidates() {
-        guard appliedCorrection == nil,
-              let word = KeyboardEditingRules.autocorrectionWord(
-                contextBefore: context().0,
-                fieldKind: fieldKind(),
-                autocorrectionEnabled: autocorrectionEnabled()
-              ) else {
+    private func currentAutocorrectionWord() -> String? {
+        KeyboardEditingRules.autocorrectionWord(
+            contextBefore: context().0,
+            fieldKind: fieldKind(),
+            autocorrectionEnabled: autocorrectionEnabled()
+        )
+    }
+
+    private func refreshCorrectionCandidates() async {
+        guard appliedCorrection == nil, let word = currentAutocorrectionWord() else {
             correctionCandidates = []
+            pendingCorrection = nil
             return
         }
-        correctionCandidates = correctionsForWord(word, context().0).compactMap { suggestion in
+
+        let suggestions = await correctionsForWord(
+            word,
+            context().0,
+            evidence(matching: word)
+        )
+        // The user keeps typing while this runs. Discard anything that no
+        // longer describes the word actually in the field.
+        guard currentAutocorrectionWord() == word, appliedCorrection == nil else { return }
+
+        let mapped = suggestions.compactMap { suggestion -> KeyboardCorrection? in
             guard let replacement = KeyboardEditingRules.replacement(
                 suggestion.text,
                 matchingCapitalizationOf: word
@@ -1062,29 +1240,32 @@ struct KeyboardRootView: View {
                 automaticallyReplaces: suggestion.automaticallyReplaces
             )
         }
+        correctionCandidates = mapped
+        pendingCorrection = PendingCorrection(word: word, candidates: mapped)
     }
 
+    /// Debounced so a fast typist causes one lookup rather than one per key,
+    /// and cancellable so an in-flight lookup for a stale word is abandoned.
     private func scheduleCorrectionRefresh() {
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(35))
-            refreshCorrectionCandidates()
+        correctionTask?.cancel()
+        correctionTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(20))
+            guard !Task.isCancelled else { return }
+            await refreshCorrectionCandidates()
         }
     }
 
     private func chooseCorrection(_ suggestion: KeyboardCorrection) {
-        guard let word = KeyboardEditingRules.autocorrectionWord(
-            contextBefore: context().0,
-            fieldKind: fieldKind(),
-            autocorrectionEnabled: autocorrectionEnabled()
-        ),
-              let replacement = KeyboardEditingRules.replacement(
-                suggestion.text,
-                matchingCapitalizationOf: word
-              ) else { return }
+        // `suggestion.text` already carries the original word's capitalization.
+        guard let word = currentAutocorrectionWord(),
+              case let replacement = suggestion.text,
+              !replacement.isEmpty else { return }
 
         for _ in word { proxyDeleteBackward() }
         proxyInsertText(replacement)
         correctionCandidates = []
+        pendingCorrection = nil
+        tapEvidence = []
         appliedCorrection = AppliedCorrection(
             original: word,
             replacement: replacement,
@@ -1109,6 +1290,8 @@ struct KeyboardRootView: View {
             appliedCorrection.replacement
         )
         self.appliedCorrection = nil
+        pendingCorrection = nil
+        tapEvidence = []
         scheduleCorrectionRefresh()
         KeyboardHaptics.keyDown()
     }
@@ -1124,6 +1307,7 @@ struct KeyboardRootView: View {
     private func deleteWordBackward() {
         lastInsertedText = nil
         lastSpaceTapAt = nil
+        tapEvidence = []
         let before = context().0 ?? ""
         var count = 0
         var index = before.endIndex
@@ -1320,6 +1504,15 @@ private struct KeyFramesKey: PreferenceKey {
 
     static func reduce(value: inout [KeyID: CGRect], nextValue: () -> [KeyID: CGRect]) {
         value.merge(nextValue()) { _, new in new }
+    }
+}
+
+private struct KeyAreaBoundsKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }
 

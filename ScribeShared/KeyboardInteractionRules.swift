@@ -88,7 +88,10 @@ struct KeyboardGeometryRules: Equatable {
     let outerInset: Double
     let toolbarHeight: Double
     let toolbarToKeyGap: Double
-    let controlWidth: Double
+    /// Target width for Shift and Delete on a roomy screen. The width actually
+    /// used is `controlWidth(totalWidth:)`, which shrinks this when the screen
+    /// cannot afford it.
+    let preferredControlWidth: Double
     let hostHeightAdjustment: Double
 
     static let portrait = KeyboardGeometryRules(
@@ -98,7 +101,7 @@ struct KeyboardGeometryRules: Equatable {
         outerInset: 7,
         toolbarHeight: 39,
         toolbarToKeyGap: 6,
-        controlWidth: 50,
+        preferredControlWidth: 50,
         hostHeightAdjustment: 5
     )
 
@@ -109,7 +112,7 @@ struct KeyboardGeometryRules: Equatable {
         outerInset: 4,
         toolbarHeight: 32,
         toolbarToKeyGap: 5,
-        controlWidth: 87,
+        preferredControlWidth: 87,
         hostHeightAdjustment: 3
     )
 
@@ -127,22 +130,56 @@ struct KeyboardGeometryRules: Equatable {
         (tenColumnKeyWidth(totalWidth: totalWidth) + horizontalGap) / 2
     }
 
+    /// Shift and Delete shrink rather than overflow.
+    ///
+    /// These used to be a hard 50 pt (87 pt compact) at every screen width. On
+    /// a 320 pt iPhone the bottom letter row then needed 324 pt of a 306 pt
+    /// space and overflowed by 18 pt, squeezing the row it was supposed to
+    /// frame. Roomy screens are unaffected: the preferred width still wins
+    /// wherever it fits.
+    /// Floor for a shrunken control key. The hit grid extends Shift and Delete
+    /// to the screen edge, so the touch target stays comfortably larger than
+    /// the cap. This only stops the cap collapsing at absurd widths.
+    static let minimumControlWidth: Double = 32
+
+    func controlWidth(totalWidth: Double) -> Double {
+        let available = totalWidth - 2 * outerInset
+        let letters = 7 * tenColumnKeyWidth(totalWidth: totalWidth) + 6 * horizontalGap
+        // Reserve at least one standard gap on each side of the letter block.
+        let affordable = (available - letters - 2 * horizontalGap) / 2
+        return max(
+            Self.minimumControlWidth,
+            min(preferredControlWidth, affordable)
+        )
+    }
+
     func controlToLetterGap(totalWidth: Double) -> Double {
         let available = totalWidth - 2 * outerInset
         let letters = 7 * tenColumnKeyWidth(totalWidth: totalWidth)
         let internalLetterGaps = 6 * horizontalGap
-        return max(horizontalGap, (available - 2 * controlWidth - letters - internalLetterGaps) / 2)
+        let controls = 2 * controlWidth(totalWidth: totalWidth)
+        return max(horizontalGap, (available - controls - letters - internalLetterGaps) / 2)
     }
 
 	func fittedControlRowKeyWidth(totalWidth: Double, characterCount: Int) -> Double {
 		guard characterCount > 0 else { return 0 }
 		let available = totalWidth - 2 * outerInset
 		let gapCount = Double(characterCount + 1)
+		let controls = 2 * controlWidth(totalWidth: totalWidth)
 		return max(
 			1,
-			(available - 2 * controlWidth - gapCount * horizontalGap) / Double(characterCount)
+			(available - controls - gapCount * horizontalGap) / Double(characterCount)
 		)
 	}
+
+    /// Total width the bottom letter row needs. Must never exceed the space
+    /// available, or the row overflows and the layout compresses.
+    func letterControlRowWidth(totalWidth: Double) -> Double {
+        2 * controlWidth(totalWidth: totalWidth)
+            + 2 * controlToLetterGap(totalWidth: totalWidth)
+            + 7 * tenColumnKeyWidth(totalWidth: totalWidth)
+            + 6 * horizontalGap
+    }
 }
 
 enum KeyboardCursorRules {

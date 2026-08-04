@@ -60,16 +60,28 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	private var currentRequestID: String?
 	private var requestGate = DictationRequestGate()
 	private let pendingRecordingPathKey = "mobile.pendingRecordingPath"
-	private let compatibilityPreferenceKey = "mobile.compatibilityProfileSignature.v2"
-	private let legacyCompatibilityPreferenceKey = "mobile.preferCompatibilityModel"
+	private let fallbackSignatureKey = "mobile.modelFallback.signature.v3"
+	private let fallbackFailureCountKey = "mobile.modelFallback.consecutiveFailures.v3"
+	private let fallbackLastFailureKey = "mobile.modelFallback.lastFailureAt.v3"
+	private let legacyPreferenceKeys = [
+		"mobile.preferCompatibilityModel",
+		"mobile.compatibilityProfileSignature.v2",
+	]
+	/// Set when High Accuracy fails during this launch. It keeps the current
+	/// session on Base without writing anything durable, so relaunching always
+	/// gives the quality model another chance.
+	private var sessionOnlyCompatibilityFallback = false
 	private static let savedRecordingMessage = "Transcription failed, but your recording is saved. Tap Retry."
 	private static let sessionDuration: TimeInterval = 15 * 60
 
     override init() {
         super.init()
-		// Build 11 stored a sticky Boolean that could permanently trap upgraded
-		// devices on Base. Version 2 intentionally starts a fresh model policy.
-		UserDefaults.standard.removeObject(forKey: legacyCompatibilityPreferenceKey)
+		// Earlier builds stored a sticky downgrade that permanently trapped
+		// devices on Base after a single transient fault. Version 3 replaces it
+		// with a lapsing, failure-counted policy and discards the old keys.
+		for key in legacyPreferenceKeys {
+			UserDefaults.standard.removeObject(forKey: key)
+		}
 		if let data = UserDefaults.standard.data(forKey: "mobile.dictationHistory"),
 		   let decoded = try? JSONDecoder().decode([HistoryItem].self, from: data) {
 			history = decoded
@@ -215,11 +227,14 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(
-                .playAndRecord,
-                mode: .measurement,
-                options: [.defaultToSpeaker, .allowBluetoothHFP]
-            )
+            // Scribe never plays audio, so `.record` avoids seizing the output
+            // route. Critically, Bluetooth HFP is *not* requested: opting into it
+            // routes capture through the headset's 8 kHz narrowband mic, which
+            // sits below the 16 kHz band Whisper's mel front-end expects and was
+            // quietly halving accuracy whenever AirPods were connected. Without
+            // the option, iOS captures from the wideband built-in mic while
+            // Bluetooth playback continues undisturbed.
+            try session.setCategory(.record, mode: .measurement)
             try session.setActive(true)
         } catch {
             presentRecordingFailure(error)
@@ -436,11 +451,18 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
         do {
             let url = try makePendingRecordingURL()
+            // Uncompressed 16 kHz mono PCM, matching the Mac recorder. The old
+            // AAC encode threw away spectral detail before Whisper ever saw the
+            // audio; at these durations the file-size saving is irrelevant and
+            // the codec artefacts are not.
             let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVFormatIDKey: Int(kAudioFormatLinearPCM),
                 AVSampleRateKey: 16_000,
                 AVNumberOfChannelsKey: 1,
-                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
             ]
 
             let recorder = try AVAudioRecorder(url: url, settings: settings)
@@ -644,13 +666,28 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		ProcessInfo.processInfo.operatingSystemVersion.majorVersion
 	}
 
-	private var preferredModelProfile: ScribeModelProfile {
-		ScribeModelPolicy.preferredProfile(
-			storedCompatibilitySignature: UserDefaults.standard.string(
-				forKey: compatibilityPreferenceKey
-			),
+	private var storedFallbackState: ScribeModelFallbackState {
+		let defaults = UserDefaults.standard
+		let lastFailure = defaults.object(forKey: fallbackLastFailureKey) as? Date
+		return ScribeModelFallbackState(
+			signature: defaults.string(forKey: fallbackSignatureKey),
+			consecutiveFailures: defaults.integer(forKey: fallbackFailureCountKey),
+			lastFailureAt: lastFailure
+		)
+	}
+
+	/// What the stored policy says this device should use across launches,
+	/// ignoring any in-session fallback. Background installation follows this so
+	/// a failed *load* never stops a perfectly healthy *download*.
+	private var durableModelProfile: ScribeModelProfile {
+		ScribeModelFallbackPolicy.preferredProfile(
+			fallbackState: storedFallbackState,
 			osMajorVersion: osMajorVersion
 		)
+	}
+
+	private var preferredModelProfile: ScribeModelProfile {
+		sessionOnlyCompatibilityFallback ? .compatibility : durableModelProfile
 	}
 
 	private var modelDownloadBase: URL {
@@ -678,6 +715,9 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 				activeModelName = profile.displayName
 				modelInstallationProgress = nil
 				if profile == .highAccuracy {
+					// A working load clears the failure history outright, so an
+					// old transient fault cannot accumulate toward a downgrade.
+					recordHighAccuracySuccess()
 					modelInstallationMessage = "High Accuracy model ready"
 				} else {
 					modelInstallationMessage = "Compatibility model ready"
@@ -716,7 +756,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		   downloadedModelFolder(for: .highAccuracy) == nil,
 		   localCompatibilityModelFolder() != nil {
 			// Existing users already have Base. Keep dictation immediately
-			// available while the 627 MB quality model installs in parallel.
+			// available while the 1.6 GB quality model installs in parallel.
 			try await prepareModelIfNeeded(profile: .compatibility)
 			stageHighAccuracyModelIfNeeded()
 			return
@@ -726,17 +766,15 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			try await prepareModelIfNeeded(profile: preferredProfile)
 		} catch {
 			guard preferredProfile == .highAccuracy else { throw error }
-			let shouldPersistFallback = shouldUseCompatibilityMode(for: error)
 			logger.warning("High Accuracy model preparation failed; switching to Base: \(error.localizedDescription, privacy: .public)")
+			recordHighAccuracyFailure()
 			updateModelPreparationStatus("Switching to the reliable on-device fallback…")
 			try await prepareModelIfNeeded(profile: .compatibility)
 			modelInstallationProgress = nil
 			modelInstallationMessage = "Compatibility model ready"
-			if shouldPersistFallback {
-				persistCompatibilityPreference()
-			} else {
-				stageHighAccuracyModelIfNeeded()
-			}
+			// Keep installing the quality model unless this device has now failed
+			// often enough to earn a durable downgrade.
+			stageHighAccuracyModelIfNeeded()
 		}
 	}
 
@@ -1036,8 +1074,8 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			guard requiredFiles.allSatisfy({ fileSize(at: $0) > 0 }) else {
 				return requirement.name
 			}
-			if let expectedWeightBytes = requirement.expectedWeightBytes,
-			   fileSize(at: requiredFiles[2]) != expectedWeightBytes {
+			if let minimumWeightBytes = requirement.minimumWeightBytes,
+			   fileSize(at: requiredFiles[2]) < minimumWeightBytes {
 				return requirement.name
 			}
 			return nil
@@ -1079,7 +1117,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 	private func stageHighAccuracyModelIfNeeded() {
 		guard qualityInstallTask == nil,
-		      preferredModelProfile == .highAccuracy,
+		      durableModelProfile == .highAccuracy,
 		      downloadedModelFolder(for: .highAccuracy) == nil else { return }
 
 		let generation = UUID()
@@ -1122,9 +1160,16 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	}
 
 	private func transcribeWithRecovery(audioURL: URL) async throws -> [TranscriptionResult] {
+		// These match the Mac build's decoding behaviour. Timestamp tokens stay
+		// enabled: they anchor segmentation and feed the compression-ratio and
+		// no-speech fallbacks, and suppressing them on the Large-v3 family is a
+		// well-known source of repetition loops and dropped clause boundaries.
 		let options = DecodingOptions(
+			language: ScribeDictationLanguagePolicy.language(
+				forPreferred: Locale.preferredLanguages
+			),
 			skipSpecialTokens: true,
-			withoutTimestamps: true,
+			withoutTimestamps: false,
 			suppressBlank: true
 		)
 		do {
@@ -1139,15 +1184,14 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			      shouldUseCompatibilityMode(for: error) else { throw error }
 			logger.warning("High Accuracy transcription failed; retrying the saved audio with Base: \(error.localizedDescription, privacy: .public)")
 			publishStatus(.transcribing, "Retrying with the reliable on-device fallback…")
+			recordHighAccuracyFailure()
 			await unloadCurrentModel()
 			try await prepareModelIfNeeded(profile: .compatibility)
 			guard let whisperKit else { throw DictationError.modelUnavailable }
-			let result = try await whisperKit.transcribe(
+			return try await whisperKit.transcribe(
 				audioPath: audioURL.path,
 				decodeOptions: options
 			)
-			persistCompatibilityPreference()
-			return result
 		}
 	}
 
@@ -1159,15 +1203,33 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		modelProfile = nil
 	}
 
-	private func persistCompatibilityPreference() {
-		UserDefaults.standard.set(
-			ScribeModelPolicy.compatibilitySignature(osMajorVersion: osMajorVersion),
-			forKey: compatibilityPreferenceKey
+	/// Records one High Accuracy failure. The fallback stays in memory until the
+	/// device has failed repeatedly; only then does it survive a relaunch, and
+	/// even then it lapses so the quality model gets re-tested.
+	private func recordHighAccuracyFailure() {
+		sessionOnlyCompatibilityFallback = true
+		let updated = ScribeModelFallbackPolicy.stateAfterFailure(
+			storedFallbackState,
+			osMajorVersion: osMajorVersion
 		)
+		let defaults = UserDefaults.standard
+		defaults.set(updated.signature, forKey: fallbackSignatureKey)
+		defaults.set(updated.consecutiveFailures, forKey: fallbackFailureCountKey)
+		defaults.set(updated.lastFailureAt, forKey: fallbackLastFailureKey)
+		logger.warning("High Accuracy failure \(updated.consecutiveFailures, privacy: .public) of \(ScribeModelFallbackPolicy.failuresBeforePersisting, privacy: .public) before the preference persists")
+	}
+
+	private func recordHighAccuracySuccess() {
+		sessionOnlyCompatibilityFallback = false
+		guard storedFallbackState != .empty else { return }
+		let defaults = UserDefaults.standard
+		defaults.removeObject(forKey: fallbackSignatureKey)
+		defaults.removeObject(forKey: fallbackFailureCountKey)
+		defaults.removeObject(forKey: fallbackLastFailureKey)
 	}
 
 	func retryHighAccuracyModel() {
-		UserDefaults.standard.removeObject(forKey: compatibilityPreferenceKey)
+		recordHighAccuracySuccess()
 		modelInstallationMessage = "Resuming the High Accuracy download…"
 		let generation = UUID()
 		qualityRetryGeneration = generation
@@ -1247,9 +1309,11 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			create: true
 		).appendingPathComponent("PendingDictations", isDirectory: true)
 		try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+		// AVAudioRecorder picks its container from the extension, so linear PCM
+		// has to land in a .wav rather than the old .m4a.
 		return folder
 			.appendingPathComponent("scribe-\(UUID().uuidString)")
-			.appendingPathExtension("m4a")
+			.appendingPathExtension("wav")
 	}
 
 	private func discardPendingRecording() {
@@ -1434,7 +1498,7 @@ private enum DictationError: LocalizedError {
         case .modelUnavailable:
             "The on-device transcription model isn’t ready."
         case .insufficientModelStorage:
-            "High Accuracy needs about 1.5 GB of free storage."
+            "High Accuracy needs about 2.6 GB of free storage."
 		case .incompleteModelDownload(let components):
 			"The High Accuracy download is incomplete: \(components.joined(separator: ", "))."
         case .noSpeechDetected:
@@ -1445,7 +1509,7 @@ private enum DictationError: LocalizedError {
 	var modelInstallationMessage: String {
 		switch self {
 		case .insufficientModelStorage:
-			"High Accuracy needs about 1.5 GB free. Free some storage, then try again."
+			"High Accuracy needs about 2.6 GB free. Free some storage, then try again."
 		case .incompleteModelDownload:
 			"High Accuracy found an incomplete cache. Tap Try High Accuracy again — Scribe will repair and resume it."
 		case .modelUnavailable, .recordingDidNotStart, .noSpeechDetected:

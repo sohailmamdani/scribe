@@ -53,20 +53,35 @@ final class KeyboardViewController: UIInputViewController {
             autocorrectionEnabled: { [weak self] in
                 self?.textDocumentProxy.autocorrectionType != .no
             },
-            correctionsForWord: { [weak self] word, contextBefore in
-                self?.corrections(for: word, contextBefore: contextBefore) ?? []
+            correctionsForWord: { [weak self] word, contextBefore, evidence in
+                guard let self else { return [] }
+                let language = await MainActor.run {
+                    self.textDocumentProxy.documentInputMode?.primaryLanguage ?? "en-US"
+                }
+                return await self.autocorrectionEngine.corrections(
+                    for: word,
+                    contextBefore: contextBefore,
+                    language: language,
+                    evidence: evidence
+                )
             },
             recordAcceptedCorrection: { [weak self] original, replacement in
-                self?.autocorrectionEngine.recordAccepted(
-                    original: original,
-                    replacement: replacement
-                )
+                guard let self else { return }
+                Task {
+                    await self.autocorrectionEngine.recordAccepted(
+                        original: original,
+                        replacement: replacement
+                    )
+                }
             },
             recordRejectedCorrection: { [weak self] original, replacement in
-                self?.autocorrectionEngine.recordRejected(
-                    original: original,
-                    replacement: replacement
-                )
+                guard let self else { return }
+                Task {
+                    await self.autocorrectionEngine.recordRejected(
+                        original: original,
+                        replacement: replacement
+                    )
+                }
             },
             openContainingApp: { [weak self] url, completion in
                 guard let self else {
@@ -98,9 +113,13 @@ final class KeyboardViewController: UIInputViewController {
         keyboardHeightConstraint = heightConstraint
 
         requestSupplementaryLexicon { [weak self] lexicon in
+            // UILexicon is not Sendable, so lift the strings out here and hand
+            // the actor plain values.
+            let entries = lexicon.entries.flatMap { [$0.userInput, $0.documentText] }
             Task { @MainActor [weak self] in
-                self?.autocorrectionEngine.updateSupplementaryLexicon(lexicon)
-                self?.documentState.textChanged()
+                guard let self else { return }
+                await self.autocorrectionEngine.updateSupplementaryLexicon(entries: entries)
+                self.documentState.textChanged()
             }
         }
     }
@@ -152,18 +171,6 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
         extensionContext.open(url, completionHandler: completion)
-    }
-
-    private func corrections(
-        for word: String,
-        contextBefore: String?
-    ) -> [KeyboardCorrection] {
-        let language = textDocumentProxy.documentInputMode?.primaryLanguage ?? "en-US"
-        return autocorrectionEngine.corrections(
-            for: word,
-            contextBefore: contextBefore,
-            language: language
-        )
     }
 
     private static func fieldKind(for keyboardType: UIKeyboardType) -> KeyboardFieldKind {
