@@ -80,7 +80,7 @@ struct DictationSession: Codable, Equatable, Sendable {
         expiresAt: .distantPast
     )
 
-    func isAlive(at date: Date = Date(), heartbeatTolerance: TimeInterval = 15) -> Bool {
+    func isAlive(at date: Date = Date(), heartbeatTolerance: TimeInterval = 6) -> Bool {
         isActive
             && date < expiresAt
             && date.timeIntervalSince(heartbeat) < heartbeatTolerance

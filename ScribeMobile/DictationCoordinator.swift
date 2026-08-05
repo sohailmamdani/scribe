@@ -157,6 +157,13 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		      !isTranscribing,
 		      audioRecorder == nil else { return }
 		logger.warning("Releasing the transcription model after a memory warning")
+		// A live session promises the keyboard that the app can accept a request
+		// without being brought to the foreground. Once the model is released
+		// that promise is false: trying to rebuild a large Core ML model in the
+		// background is precisely the path most likely to be suspended or killed.
+		// Withdraw the shared heartbeat first so every host app takes the safe
+		// foreground handoff on its next Dictate tap.
+		if isSessionActive { endFlowSession() }
 		await unloadCurrentModel()
 		activeModelName = "Model released to save memory"
 		if state == .ready { state = .preparing }

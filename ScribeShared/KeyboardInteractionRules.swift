@@ -62,7 +62,8 @@ enum KeyboardGestureResolver {
         deltaY: Double,
         keyWidth: Double,
         keyHeight: Double,
-        enteredDifferentLetter: Bool
+        enteredDifferentLetter: Bool,
+        alternateGestureArmed: Bool
     ) -> KeyboardGestureResolution {
         let distance = hypot(deltaX, deltaY)
         let horizontalCorridor = min(14, keyWidth * 0.38)
@@ -70,10 +71,10 @@ enum KeyboardGestureResolver {
             && abs(deltaX) <= horizontalCorridor
             && deltaY >= 1.5 * abs(deltaX)
 
-        // A straight downward flick stays an alternate even if the finger
-        // overshoots the cap. Only entering another letter beyond the compact
-        // flick corridor is allowed to turn it into word swiping.
-        if isVerticalDownwardGesture {
+        // Ordinary taps often drift downward while the finger lifts. That
+        // movement can only become an alternate after the deliberate hold has
+        // armed symbol selection.
+        if alternateGestureArmed, isVerticalDownwardGesture {
             return deltaY >= commitDistance ? .alternateCommit : .alternatePreview
         }
 

@@ -152,8 +152,8 @@ final class DictationProtocolTests: XCTestCase {
             at: now
         )
 
-        XCTAssertTrue(store.session.isAlive(at: now.addingTimeInterval(10)))
-        XCTAssertFalse(store.session.isAlive(at: now.addingTimeInterval(16)))
+        XCTAssertTrue(store.session.isAlive(at: now.addingTimeInterval(5)))
+        XCTAssertFalse(store.session.isAlive(at: now.addingTimeInterval(7)))
 
         store.refreshSessionHeartbeat(processID: "process-1", at: now.addingTimeInterval(15))
         XCTAssertTrue(store.session.isAlive(at: now.addingTimeInterval(20)))

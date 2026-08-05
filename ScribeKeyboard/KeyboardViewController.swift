@@ -30,6 +30,11 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
+        // UIKit's current feedback API must be associated with the live input
+        // view. Installing it here also primes the engine before SwiftUI begins
+        // handling key touches.
+        KeyboardHaptics.attach(to: view)
+
         let rootView = KeyboardRootView(
             documentState: documentState,
             insertText: { [weak self] text in self?.textDocumentProxy.insertText(text) },
@@ -140,6 +145,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        KeyboardHaptics.prepareForInput()
         updateHostEnvironment()
         updateKeyboardHeight()
     }

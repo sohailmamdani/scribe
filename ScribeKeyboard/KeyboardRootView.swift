@@ -66,8 +66,9 @@ struct KeyboardRootView: View {
     @State private var spaceIsPressed = false
     @State private var spaceCursorMode = false
     @State private var spaceCursorStep = 0
-    @State private var spaceMaximumTravel: CGFloat = 0
+    @State private var spaceTouchStartX: CGFloat?
     @State private var spaceHoldTask: Task<Void, Never>?
+    @State private var dictationWakeFallbackTask: Task<Void, Never>?
 
     private static let keySpace = "keyArea"
 
@@ -129,7 +130,6 @@ struct KeyboardRootView: View {
         .background(Color(.systemGray5))
         .animation(.easeOut(duration: 0.14), value: spaceCursorMode)
         .onAppear {
-            KeyboardHaptics.prepareForInput()
             synchronizeDocumentState()
             state.start { transcript in
                 let surrounding = context()
@@ -163,6 +163,8 @@ struct KeyboardRootView: View {
         }
         .onDisappear {
             state.stop()
+            dictationWakeFallbackTask?.cancel()
+            dictationWakeFallbackTask = nil
             correctionTask?.cancel()
             correctionTask = nil
             cancelActiveTouch()
@@ -597,7 +599,17 @@ struct KeyboardRootView: View {
             )
             .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
             .contentShape(Rectangle())
-            .gesture(spaceCursorGesture)
+            .overlay {
+                // Use the same cancellable UIKit touch path as the letter grid.
+                // SwiftUI's DragGesture could lose a fast Space when the next
+                // finger landed before the first one had fully lifted.
+                KeyboardTouchSurface(
+                    onBegan: beginSpaceGesture,
+                    onMoved: moveSpaceGesture,
+                    onEnded: endSpaceGesture,
+                    onCancelled: cancelSpaceGesture
+                )
+            }
             .accessibilityElement()
             .accessibilityLabel("Space")
             .accessibilityHint("Touch and hold, then drag to move the cursor.")
@@ -605,40 +617,32 @@ struct KeyboardRootView: View {
             .accessibilityAction { spaceTapped() }
     }
 
-    private var spaceCursorGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if !spaceGestureIsActive {
-                    beginSpaceGesture()
-                }
-
-                let travel = hypot(value.translation.width, value.translation.height)
-                spaceMaximumTravel = max(spaceMaximumTravel, travel)
-                guard spaceCursorMode else { return }
-
-                let step = KeyboardCursorRules.characterOffset(
-                    forHorizontalTranslation: Double(value.translation.width)
-                )
-                let delta = step - spaceCursorStep
-                guard delta != 0 else { return }
-                spaceCursorStep = step
-                proxyAdjustTextPosition(delta)
-                KeyboardHaptics.cursorTick()
-            }
-            .onEnded { value in
-                let endTravel = hypot(value.translation.width, value.translation.height)
-                let shouldInsertSpace = !spaceCursorMode
-                    && max(spaceMaximumTravel, endTravel) < 14
-                cancelSpaceGesture()
-                if shouldInsertSpace { spaceTapped() }
-            }
+    private func moveSpaceGesture(to point: CGPoint) {
+        guard spaceGestureIsActive,
+              spaceCursorMode,
+              let spaceTouchStartX else { return }
+        let step = KeyboardCursorRules.characterOffset(
+            forHorizontalTranslation: Double(point.x - spaceTouchStartX)
+        )
+        let delta = step - spaceCursorStep
+        guard delta != 0 else { return }
+        spaceCursorStep = step
+        proxyAdjustTextPosition(delta)
+        KeyboardHaptics.cursorTick()
     }
 
-    private func beginSpaceGesture() {
+    private func endSpaceGesture(at _: CGPoint) {
+        guard spaceGestureIsActive else { return }
+        let shouldInsertSpace = !spaceCursorMode
+        cancelSpaceGesture()
+        if shouldInsertSpace { spaceTapped() }
+    }
+
+    private func beginSpaceGesture(at point: CGPoint) {
         spaceGestureIsActive = true
         spaceIsPressed = true
         spaceCursorStep = 0
-        spaceMaximumTravel = 0
+        spaceTouchStartX = point.x
         KeyboardHaptics.keyDown()
         spaceHoldTask?.cancel()
         spaceHoldTask = Task { @MainActor in
@@ -659,7 +663,7 @@ struct KeyboardRootView: View {
         spaceIsPressed = false
         spaceCursorMode = false
         spaceCursorStep = 0
-        spaceMaximumTravel = 0
+        spaceTouchStartX = nil
     }
 
     // MARK: - Touch handling
@@ -741,7 +745,8 @@ struct KeyboardRootView: View {
                 deltaY: Double(deltaY),
                 keyWidth: Double(characterKeyWidth),
                 keyHeight: Double(keyHeight),
-                enteredDifferentLetter: enteredDifferentLetter
+                enteredDifferentLetter: enteredDifferentLetter,
+                alternateGestureArmed: false
             )
             switch resolution {
             case .alternatePreview:
@@ -834,7 +839,8 @@ struct KeyboardRootView: View {
                 deltaY: Double(point.y - start.y),
                 keyWidth: Double(characterKeyWidth),
                 keyHeight: Double(keyHeight),
-                enteredDifferentLetter: false
+                enteredDifferentLetter: false,
+                alternateGestureArmed: true
             )
             if resolution == .alternateCommit {
                 commitAlternate(alternate, from: startKey)
@@ -852,22 +858,8 @@ struct KeyboardRootView: View {
         case .idle, .deleting, .swiping:
             return
 		case .pressed:
-			// A very fast flick can deliver only the initial change plus the final
-			// end location. Resolve that endpoint here so sparse touch sampling does
-			// not turn an intentional alternate into the primary character.
-			if case .character(let character) = startKey,
-			   let alternate = alternateSymbol(for: character),
-			   let start = touchStart,
-			   KeyboardGestureResolver.resolve(
-				deltaX: Double(point.x - start.x),
-				deltaY: Double(point.y - start.y),
-				keyWidth: Double(characterKeyWidth),
-				keyHeight: Double(keyHeight),
-				enteredDifferentLetter: false
-			   ) == .alternateCommit {
-				commitAlternate(alternate, from: startKey)
-				return
-			}
+			// A quick downward lift remains the primary key. Alternates are only
+			// reachable after the deliberate hold task switches to the palette.
 			break
 		case .control:
             break
@@ -1489,7 +1481,7 @@ struct KeyboardRootView: View {
         correctionCandidates = []
         let sessionWasAlive = state.sessionAlive
         guard state.beginStart() else { return }
-        if !sessionWasAlive { openScribe() }
+        wakeScribeIfNeeded(sessionWasAlive: sessionWasAlive)
     }
 
     private func retryOrBeginDictation() {
@@ -1501,7 +1493,7 @@ struct KeyboardRootView: View {
         if state.retryAvailable {
             let sessionWasAlive = state.sessionAlive
             guard state.beginRetry() else { return }
-            if !sessionWasAlive { openScribe() }
+            wakeScribeIfNeeded(sessionWasAlive: sessionWasAlive)
         } else {
             beginDictation()
         }
@@ -1523,6 +1515,26 @@ struct KeyboardRootView: View {
                     if !success { state.handoffDidFail() }
                 }
             }
+        }
+    }
+
+    private func wakeScribeIfNeeded(sessionWasAlive: Bool) {
+        dictationWakeFallbackTask?.cancel()
+        if !sessionWasAlive {
+            openScribe()
+            return
+        }
+
+        // A heartbeat can outlive a process for a few seconds. The healthy app
+        // polls in 400 ms and acknowledges before doing any model or audio
+        // work; if that acknowledgement never arrives, foreground the app
+        // instead of leaving this and every subsequently-created keyboard
+        // waiting on the same dead session.
+        dictationWakeFallbackTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled,
+                  state.currentRequestNeedsWake else { return }
+            openScribe()
         }
     }
 }
@@ -1620,6 +1632,11 @@ final class KeyboardDictationState: NSObject, ObservableObject {
     private static let acknowledgementTimeout: TimeInterval = 10
     private static let coldStartTimeout: TimeInterval = 45
     private static let transcriptionTimeout: TimeInterval = 5 * 60
+
+    var currentRequestNeedsWake: Bool {
+        guard let currentRequestID else { return false }
+        return store.status.requestID != currentRequestID
+    }
 
     private static func inFlightTimeout(for phase: DictationPhase) -> TimeInterval {
         switch phase {

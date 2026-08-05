@@ -25,15 +25,18 @@ final class KeyboardInteractionRulesTests: XCTestCase {
         }
     }
 
-    func testFlickThresholdsAreDeterministic() {
-        XCTAssertEqual(resolve(x: 0, y: 11), .primary)
-        XCTAssertEqual(resolve(x: 0, y: 12), .alternatePreview)
-        XCTAssertEqual(resolve(x: 0, y: 17), .alternatePreview)
-        XCTAssertEqual(resolve(x: 0, y: 18), .alternateCommit)
+    func testAlternateFlickOnlyActivatesAfterTheHoldIsArmed() {
+        XCTAssertEqual(resolve(x: 0, y: 11, alternateGestureArmed: true), .primary)
+        XCTAssertEqual(resolve(x: 0, y: 12, alternateGestureArmed: true), .alternatePreview)
+        XCTAssertEqual(resolve(x: 0, y: 17, alternateGestureArmed: true), .alternatePreview)
+        XCTAssertEqual(resolve(x: 0, y: 18, alternateGestureArmed: true), .alternateCommit)
+        XCTAssertEqual(resolve(x: 0, y: 56), .primary)
         XCTAssertEqual(resolve(x: 18, y: 2, enteredDifferentLetter: true), .primary)
 		XCTAssertEqual(resolve(x: 25, y: 2, enteredDifferentLetter: true), .wordSwipe)
-		XCTAssertEqual(resolve(x: 0, y: 56), .alternateCommit)
-		XCTAssertEqual(resolve(x: 0, y: 56, enteredDifferentLetter: true), .alternateCommit)
+		XCTAssertEqual(
+			resolve(x: 0, y: 56, enteredDifferentLetter: true, alternateGestureArmed: true),
+			.alternateCommit
+		)
 		XCTAssertEqual(resolve(x: 22, y: 56, enteredDifferentLetter: true), .wordSwipe)
         XCTAssertEqual(resolve(x: 0, y: -24), .primary)
     }
@@ -141,14 +144,16 @@ final class KeyboardInteractionRulesTests: XCTestCase {
     private func resolve(
         x: Double,
         y: Double,
-        enteredDifferentLetter: Bool = false
+        enteredDifferentLetter: Bool = false,
+        alternateGestureArmed: Bool = false
     ) -> KeyboardGestureResolution {
         KeyboardGestureResolver.resolve(
             deltaX: x,
             deltaY: y,
             keyWidth: 37.2,
             keyHeight: 45,
-            enteredDifferentLetter: enteredDifferentLetter
+            enteredDifferentLetter: enteredDifferentLetter,
+            alternateGestureArmed: alternateGestureArmed
         )
     }
 }
