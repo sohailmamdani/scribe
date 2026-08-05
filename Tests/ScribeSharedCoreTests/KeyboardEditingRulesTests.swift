@@ -150,6 +150,13 @@ final class KeyboardEditingRulesTests: XCTestCase {
         )
     }
 
+    func testAcceptedSuggestionAdvancesWithASpace() {
+        XCTAssertEqual(
+            KeyboardEditingRules.acceptedSuggestionText("Suggestion"),
+            "Suggestion "
+        )
+    }
+
     func testCorrectionDistanceTreatsAdjacentTranspositionAsOneEdit() {
         XCTAssertEqual(KeyboardEditingRules.correctionDistance("teh", "the"), 1)
         XCTAssertEqual(KeyboardEditingRules.correctionDistance("watre", "water"), 1)

@@ -905,7 +905,7 @@ struct KeyboardRootView: View {
     private func scheduleAlternateHold(for key: KeyID, alternate: Character) {
         alternateHoldTask?.cancel()
         alternateHoldTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(400))
+            try? await Task.sleep(for: KeyboardGestureResolver.alternateHoldDelay)
             guard !Task.isCancelled,
                   touchMode == .pressed,
                   startKey == key else { return }
@@ -1250,7 +1250,11 @@ struct KeyboardRootView: View {
     private func scheduleCorrectionRefresh() {
         correctionTask?.cancel()
         correctionTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(20))
+            // Start the final-word lookup promptly enough to finish before the
+            // following space. The old 20 ms debounce consumed a meaningful
+            // part of the inter-key interval and made fast typing miss the
+            // automatic-replacement path even while suggestions appeared.
+            await Task.yield()
             guard !Task.isCancelled else { return }
             await refreshCorrectionCandidates()
         }
@@ -1262,17 +1266,22 @@ struct KeyboardRootView: View {
               case let replacement = suggestion.text,
               !replacement.isEmpty else { return }
 
+        let acceptedText = KeyboardEditingRules.acceptedSuggestionText(replacement)
         for _ in word { proxyDeleteBackward() }
-        proxyInsertText(replacement)
+        proxyInsertText(acceptedText)
+        lastInsertedText = nil
         correctionCandidates = []
         pendingCorrection = nil
         tapEvidence = []
+        lastSpaceTapAt = Date()
         appliedCorrection = AppliedCorrection(
             original: word,
             replacement: replacement,
-            suffix: replacement
+            suffix: acceptedText
         )
         recordAcceptedCorrection(word, replacement)
+        refreshAutomaticShift()
+        scheduleCorrectionRefresh()
         KeyboardHaptics.keyDown()
     }
 

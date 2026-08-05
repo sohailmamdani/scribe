@@ -38,6 +38,13 @@ final class KeyboardInteractionRulesTests: XCTestCase {
         XCTAssertEqual(resolve(x: 0, y: -24), .primary)
     }
 
+    func testAlternateHoldRequiresADeliberatePause() {
+        XCTAssertEqual(
+            KeyboardGestureResolver.alternateHoldDelay,
+            .milliseconds(650)
+        )
+    }
+
     func testPortraitGeometryMatchesCapturedSystemGrid() {
         let geometry = KeyboardGeometryRules.portrait
         XCTAssertEqual(geometry.tenColumnKeyWidth(totalWidth: 440), 37.2, accuracy: 0.001)

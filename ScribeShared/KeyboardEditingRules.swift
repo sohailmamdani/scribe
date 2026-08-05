@@ -138,6 +138,12 @@ enum KeyboardEditingRules {
         return trimmed
     }
 
+    /// Accepting a suggestion advances to the next word, matching the native
+    /// iOS keyboard instead of leaving the caret attached to the replacement.
+    static func acceptedSuggestionText(_ replacement: String) -> String {
+        replacement + " "
+    }
+
     /// Keeps Apple's spelling candidates in the loop, while using the bundled
     /// frequency lexicon to break close ties. Wildly different words are
     /// removed so they can never be committed from the suggestion bar.

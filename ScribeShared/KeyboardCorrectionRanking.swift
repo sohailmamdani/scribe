@@ -92,6 +92,11 @@ enum KeyboardCorrectionRanking {
     /// without being asked. This is what stops a confident wrong replacement.
     static let autoReplaceMargin: Double = 18
 
+    /// `UITextChecker` recognition is independent evidence that a one-edit
+    /// repair is real. Requiring the full generic margin even in that case made
+    /// ordinary typos remain suggestions, despite having a clear winner.
+    static let recognizedOneEditAutoReplaceMargin: Double = 10
+
     /// Longer words earn a second edit, because two slips in nine characters is
     /// ordinary and "definately" → "definitely" is exactly the correction users
     /// expect. Short words do not: at four characters a two-edit jump changes
@@ -175,7 +180,6 @@ enum KeyboardCorrectionRanking {
         guard best.frequency > 1 || best.systemRank != nil else { return .suggest }
 
         let margin = ranked.count > 1 ? score(ranked[1]) - score(best) : .infinity
-        guard margin >= autoReplaceMargin else { return .suggest }
 
         switch best.distance {
         case 1:
@@ -183,9 +187,14 @@ enum KeyboardCorrectionRanking {
                 original,
                 with: best.word
             ) else { return .suggest }
+            let requiredMargin = best.systemRank == nil
+                ? autoReplaceMargin
+                : recognizedOneEditAutoReplaceMargin
+            guard margin >= requiredMargin else { return .suggest }
             return .autoReplace
         case 2:
-            guard original.count >= minimumLengthForTwoEditAutoReplace,
+            guard margin >= autoReplaceMargin,
+                  original.count >= minimumLengthForTwoEditAutoReplace,
                   best.spatialCost <= neutralSpatialCost,
                   best.systemRank != nil || best.bigramFrequency > 0 else {
                 return .suggest

@@ -61,6 +61,32 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
         )
     }
 
+    /// A system-recognized, one-edit repair should not need the same enormous
+    /// lead as a lexicon-only guess. This is the gap that left ordinary typos
+    /// visible in the bar but never committed them on space.
+    func testRecognizedOneEditWinnerUsesPracticalAutoReplaceMargin() {
+        let ranked = KeyboardCorrectionRanking.rank([
+            candidate("word", frequency: 10_000_000, systemRank: 0, spatialCost: 0.25),
+            candidate("ward", frequency: 10_000_000, systemRank: 1, spatialCost: 0.55),
+        ])
+        let margin = KeyboardCorrectionRanking.score(ranked[1])
+            - KeyboardCorrectionRanking.score(ranked[0])
+        XCTAssertGreaterThanOrEqual(
+            margin,
+            KeyboardCorrectionRanking.recognizedOneEditAutoReplaceMargin
+        )
+        XCTAssertLessThan(margin, KeyboardCorrectionRanking.autoReplaceMargin)
+        XCTAssertEqual(
+            KeyboardCorrectionRanking.decision(
+                original: "wprd",
+                originalIsKnownWord: false,
+                isProtected: false,
+                ranked: ranked
+            ),
+            .autoReplace
+        )
+    }
+
     // MARK: - Restraint
 
     /// Two near-equal candidates must not commit themselves. This is the guard

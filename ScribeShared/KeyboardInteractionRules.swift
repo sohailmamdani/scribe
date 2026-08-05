@@ -52,6 +52,10 @@ enum KeyboardGestureResolver {
     static let previewDistance = 12.0
     static let commitDistance = 18.0
     static let swipeDistance = 24.0
+    /// A symbol should require an unmistakable hold. Four hundred milliseconds
+    /// was close enough to an ordinary deliberate key press that alternates
+    /// could appear accidentally.
+    static let alternateHoldDelay: Duration = .milliseconds(650)
 
     static func resolve(
         deltaX: Double,
