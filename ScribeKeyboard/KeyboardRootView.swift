@@ -41,12 +41,15 @@ struct KeyboardRootView: View {
 	/// this precomputed answer instead of blocking to produce one.
 	@State private var pendingCorrection: PendingCorrection?
 	@State private var correctionTask: Task<Void, Never>?
+	/// Immediate apostrophe restoration must still honor an undo before the
+	/// actor has persisted it to defaults.
+	@State private var sessionRejectedAutocorrectionWords: Set<String> = []
 	/// Where the finger actually landed for each character of the word being
 	/// typed, feeding spatial scoring in the correction engine.
 	@State private var tapEvidence: [KeyboardTapEvidence] = []
 
     // Unified touch handling over the key area: frames are collected per key
-    // so one drag gesture can drive taps, hold-to-repeat delete, and swipes.
+    // so one cancellable touch surface can drive taps, delete repeat, and swipes.
     @State private var keyFrames: [KeyID: CGRect] = [:]
     /// Gap-free touch regions derived from `keyFrames`. Hit-testing uses these;
     /// `keyFrames` remains the visual truth for drawing and gesture geometry.
@@ -126,6 +129,7 @@ struct KeyboardRootView: View {
         .background(Color(.systemGray5))
         .animation(.easeOut(duration: 0.14), value: spaceCursorMode)
         .onAppear {
+            KeyboardHaptics.prepareForInput()
             synchronizeDocumentState()
             state.start { transcript in
                 let surrounding = context()
@@ -301,7 +305,15 @@ struct KeyboardRootView: View {
             updateHitRegions()
         }
         .contentShape(Rectangle())
-        .gesture(keyDragGesture)
+        .overlay {
+            KeyboardTouchSurface(
+                onBegan: touchBegan,
+                onMoved: touchMoved,
+                onEnded: touchEnded,
+                onCancelled: cancelActiveTouch
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
         .overlay {
             SwipeTrailShape(points: swipePoints)
                 .stroke(
@@ -651,20 +663,6 @@ struct KeyboardRootView: View {
     }
 
     // MARK: - Touch handling
-
-    private var keyDragGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.keySpace))
-            .onChanged { value in
-                if touchStart == nil {
-                    touchBegan(at: value.location)
-                } else {
-                    touchMoved(to: value.location)
-                }
-            }
-            .onEnded { value in
-                touchEnded(at: value.location)
-            }
-    }
 
     private func touchBegan(at point: CGPoint) {
         touchStart = point
@@ -1106,20 +1104,39 @@ struct KeyboardRootView: View {
     }
 
     /// Reads the correction computed in the background while the user was still
-    /// typing. Staying synchronous here keeps the delete-and-reinsert atomic
-    /// with the delimiter that triggered it.
+    /// typing. Common apostrophe restoration also has a synchronous fallback,
+    /// so a fast `dont` + Space cannot outrun the correction actor.
     @discardableResult
     private func applyAutocorrectionIfNeeded() -> AppliedCorrection? {
         guard let word = KeyboardEditingRules.autocorrectionWord(
             contextBefore: context().0,
             fieldKind: fieldKind(),
             autocorrectionEnabled: autocorrectionEnabled()
-        ),
-              let pending = pendingCorrection,
-              pending.word == word,
-              let replacement = pending.candidates
-                .first(where: \.automaticallyReplaces)?
-                .text else {
+        ) else {
+            return nil
+        }
+
+        let pendingReplacement = pendingCorrection
+            .flatMap { $0.word == word ? $0 : nil }?
+            .candidates
+            .first(where: \.automaticallyReplaces)?
+            .text
+        let normalizedWord = word.lowercased()
+        let contractionReplacement: String?
+        if sessionRejectedAutocorrectionWords.contains(normalizedWord)
+            || KeyboardEditingRules.isRejectedAutocorrectionWord(normalizedWord) {
+            contractionReplacement = nil
+        } else {
+            contractionReplacement = KeyboardEditingRules
+                .preferredContraction(for: normalizedWord)
+                .flatMap {
+                    KeyboardEditingRules.replacement(
+                        $0,
+                        matchingCapitalizationOf: word
+                    )
+                }
+        }
+        guard let replacement = pendingReplacement ?? contractionReplacement else {
             return nil
         }
 
@@ -1295,6 +1312,7 @@ struct KeyboardRootView: View {
         for _ in appliedCorrection.suffix { proxyDeleteBackward() }
         let delimiter = String(appliedCorrection.suffix.dropFirst(appliedCorrection.replacement.count))
         proxyInsertText(appliedCorrection.original + delimiter)
+        sessionRejectedAutocorrectionWords.insert(appliedCorrection.original.lowercased())
         recordRejectedCorrection(
             appliedCorrection.original,
             appliedCorrection.replacement

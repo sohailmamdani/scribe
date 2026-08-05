@@ -34,6 +34,76 @@ enum KeyboardShiftState: Equatable, Sendable {
 }
 
 enum KeyboardEditingRules {
+    nonisolated static let rejectedAutocorrectionWordsKey =
+        "keyboard.autocorrect.rejectedWords.v2"
+
+    /// Missing-apostrophe forms that are safe enough to restore without
+    /// guessing between two ordinary words. Ambiguous spellings such as
+    /// `well`/`we'll`, `were`/`we're`, `ill`/`I'll`, and `its`/`it's` are
+    /// intentionally absent.
+    nonisolated private static let preferredContractions: [String: String] = [
+        "aint": "ain't",
+        "arent": "aren't",
+        "cant": "can't",
+        "couldnt": "couldn't",
+        "couldve": "could've",
+        "didnt": "didn't",
+        "doesnt": "doesn't",
+        "dont": "don't",
+        "hadnt": "hadn't",
+        "hasnt": "hasn't",
+        "havent": "haven't",
+        "heres": "here's",
+        "hows": "how's",
+        "im": "I'm",
+        "isnt": "isn't",
+        "itll": "it'll",
+        "ive": "I've",
+        "mightnt": "mightn't",
+        "mightve": "might've",
+        "mustnt": "mustn't",
+        "mustve": "must've",
+        "neednt": "needn't",
+        "shes": "she's",
+        "shouldnt": "shouldn't",
+        "shouldve": "should've",
+        "thats": "that's",
+        "theres": "there's",
+        "theyll": "they'll",
+        "theyre": "they're",
+        "theyve": "they've",
+        "wasnt": "wasn't",
+        "werent": "weren't",
+        "weve": "we've",
+        "whats": "what's",
+        "whens": "when's",
+        "wheres": "where's",
+        "whod": "who'd",
+        "wholl": "who'll",
+        "whos": "who's",
+        "whyd": "why'd",
+        "wont": "won't",
+        "wouldnt": "wouldn't",
+        "wouldve": "would've",
+        "yall": "y'all",
+        "youll": "you'll",
+        "youre": "you're",
+        "youve": "you've",
+    ]
+
+    nonisolated static func preferredContraction(for word: String) -> String? {
+        preferredContractions[word.lowercased()]
+    }
+
+    nonisolated static func isRejectedAutocorrectionWord(
+        _ word: String,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        let normalized = word.lowercased()
+        return defaults.stringArray(forKey: rejectedAutocorrectionWordsKey)?
+            .contains(normalized) == true
+    }
+
     static let doubleSpaceInterval: TimeInterval = 0.55
 
     static func shouldConvertDoubleSpace(
@@ -128,6 +198,11 @@ enum KeyboardEditingRules {
             return nil
         }
 
+        // The pronoun I remains capitalized even when the user entered a
+        // lowercase missing-apostrophe form such as `im` or `ive`.
+        if trimmed.lowercased().hasPrefix("i'") {
+            return "I" + trimmed.dropFirst().lowercased()
+        }
         if original == original.lowercased() {
             return trimmed.lowercased()
         }

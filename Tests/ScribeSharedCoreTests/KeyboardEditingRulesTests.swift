@@ -148,6 +148,65 @@ final class KeyboardEditingRulesTests: XCTestCase {
         XCTAssertNil(
             KeyboardEditingRules.replacement("teh", matchingCapitalizationOf: "teh")
         )
+        XCTAssertEqual(
+            KeyboardEditingRules.replacement("I'm", matchingCapitalizationOf: "im"),
+            "I'm"
+        )
+        XCTAssertEqual(
+            KeyboardEditingRules.replacement("i've", matchingCapitalizationOf: "ive"),
+            "I've"
+        )
+    }
+
+    func testPreferredContractionsRestoreApostrophes() {
+        let expected = [
+            "dont": "don't",
+            "cant": "can't",
+            "wont": "won't",
+            "im": "I'm",
+            "youre": "you're",
+            "theyve": "they've",
+            "shouldnt": "shouldn't",
+        ]
+        for (typed, contraction) in expected {
+            XCTAssertEqual(
+                KeyboardEditingRules.preferredContraction(for: typed),
+                contraction
+            )
+            XCTAssertEqual(
+                KeyboardEditingRules.preferredContraction(for: typed.uppercased()),
+                contraction
+            )
+        }
+    }
+
+    func testAmbiguousWordsAreNotForcedIntoContractions() {
+        for word in ["well", "were", "ill", "its", "lets", "shell", "id"] {
+            XCTAssertNil(KeyboardEditingRules.preferredContraction(for: word))
+        }
+    }
+
+    func testRejectedAutocorrectionWordsUseThePersistedEngineKey() {
+        let suiteName = "KeyboardEditingRulesTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(
+            ["dont"],
+            forKey: KeyboardEditingRules.rejectedAutocorrectionWordsKey
+        )
+        XCTAssertTrue(
+            KeyboardEditingRules.isRejectedAutocorrectionWord(
+                "DONT",
+                defaults: defaults
+            )
+        )
+        XCTAssertFalse(
+            KeyboardEditingRules.isRejectedAutocorrectionWord(
+                "cant",
+                defaults: defaults
+            )
+        )
     }
 
     func testAcceptedSuggestionAdvancesWithASpace() {

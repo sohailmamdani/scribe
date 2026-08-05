@@ -10,33 +10,51 @@ enum KeyboardHaptics {
     private static let wordCommit = UIImpactFeedbackGenerator(style: .medium)
     private static let notice = UINotificationFeedbackGenerator()
 
+    /// Prime the generators while the keyboard is becoming visible. UIKit's
+    /// generators fall back to a cold start after an idle pause; preparing only
+    /// *after* a key press made that first press the one most likely to feel
+    /// silent.
+    static func prepareForInput() {
+        keyTap.prepare()
+        deleteRepeat.prepare()
+        wordCommit.prepare()
+        notice.prepare()
+    }
+
     static func keyDown() {
+        keyTap.prepare()
         keyTap.impactOccurred(intensity: 0.8)
         keyTap.prepare()
     }
 
     static func deleteTick() {
+        deleteRepeat.prepare()
         deleteRepeat.impactOccurred(intensity: 0.6)
         deleteRepeat.prepare()
     }
 
     static func cursorTick() {
+        deleteRepeat.prepare()
         deleteRepeat.impactOccurred(intensity: 0.35)
         deleteRepeat.prepare()
     }
 
     static func cursorModeBegan() {
+        wordCommit.prepare()
         wordCommit.impactOccurred(intensity: 0.8)
         wordCommit.prepare()
     }
 
     static func swipeCommit() {
+        wordCommit.prepare()
         wordCommit.impactOccurred()
         wordCommit.prepare()
     }
 
     static func swipeFailed() {
+        notice.prepare()
         notice.notificationOccurred(.warning)
+        notice.prepare()
     }
 }
 

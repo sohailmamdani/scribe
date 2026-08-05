@@ -74,7 +74,6 @@ actor KeyboardAutocorrectionEngine {
     private var acceptedCorrections: [String: Int]
     private let defaults: UserDefaults
 
-    private static let rejectedWordsKey = "keyboard.autocorrect.rejectedWords.v2"
     private static let acceptedCorrectionsKey = "keyboard.autocorrect.acceptedPairs.v2"
     private static let maximumProtectedWords = 512
     private static let maximumSuggestions = 3
@@ -89,7 +88,9 @@ actor KeyboardAutocorrectionEngine {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let storedProtected = defaults.stringArray(forKey: Self.rejectedWordsKey) ?? []
+        let storedProtected = defaults.stringArray(
+            forKey: KeyboardEditingRules.rejectedAutocorrectionWordsKey
+        ) ?? []
         protectedWords = storedProtected
         protectedWordLookup = Set(storedProtected)
         acceptedCorrections = defaults.dictionary(forKey: Self.acceptedCorrectionsKey) as? [String: Int] ?? [:]
@@ -102,7 +103,9 @@ actor KeyboardAutocorrectionEngine {
         defaults: UserDefaults
     ) {
         self.defaults = defaults
-        let storedProtected = defaults.stringArray(forKey: Self.rejectedWordsKey) ?? []
+        let storedProtected = defaults.stringArray(
+            forKey: KeyboardEditingRules.rejectedAutocorrectionWordsKey
+        ) ?? []
         protectedWords = storedProtected
         protectedWordLookup = Set(storedProtected)
         acceptedCorrections = defaults.dictionary(forKey: Self.acceptedCorrectionsKey) as? [String: Int] ?? [:]
@@ -160,6 +163,9 @@ actor KeyboardAutocorrectionEngine {
 
         let isProtected = protectedWordLookup.contains(original)
             || userLexiconWords.contains(original)
+        let preferredContraction = KeyboardEditingRules
+            .preferredContraction(for: original)?
+            .lowercased()
         let previousWord = KeyboardEditingRules.wordBeforeAutocorrectionWord(
             contextBefore: contextBefore
         )?.lowercased()
@@ -172,6 +178,9 @@ actor KeyboardAutocorrectionEngine {
         var candidateWords = Set(systemRanks.keys)
         candidateWords.formUnion(lexiconCandidates(for: original, in: lexicon))
         candidateWords.formUnion(userLexiconMatches(for: original))
+        if let preferredContraction {
+            candidateWords.insert(preferredContraction)
+        }
         candidateWords.remove(original)
 
         let maximumDistance = Self.maximumDistance(forLength: original.count)
@@ -217,6 +226,24 @@ actor KeyboardAutocorrectionEngine {
                     text: candidate.word,
                     automaticallyReplaces: index == 0 && decision == .autoReplace
                 )
+            }
+        }
+
+        // Apostrophe restoration is deterministic rather than an open-ended
+        // spelling guess. Give it priority even when the corpus also contains
+        // a niche bare form (`cant` and `wont` are valid but rarely intended).
+        // Rejected corrections still protect the user's explicit choice.
+        if let preferredContraction, !isProtected {
+            suggestions.removeAll { $0.text == preferredContraction }
+            suggestions.insert(
+                KeyboardCorrection(
+                    text: preferredContraction,
+                    automaticallyReplaces: true
+                ),
+                at: 0
+            )
+            if suggestions.count > Self.maximumSuggestions {
+                suggestions.removeLast(suggestions.count - Self.maximumSuggestions)
             }
         }
 
@@ -293,7 +320,10 @@ actor KeyboardAutocorrectionEngine {
             protectedWords.removeFirst(protectedWords.count - Self.maximumProtectedWords)
             protectedWordLookup = Set(protectedWords)
         }
-        defaults.set(protectedWords, forKey: Self.rejectedWordsKey)
+        defaults.set(
+            protectedWords,
+            forKey: KeyboardEditingRules.rejectedAutocorrectionWordsKey
+        )
     }
 
     private func spellingResult(
