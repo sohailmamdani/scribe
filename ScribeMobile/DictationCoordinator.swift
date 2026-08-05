@@ -36,6 +36,21 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
     private let logger = Logger(subsystem: "sohail.Scribe.mobile", category: "Dictation")
     private let sharedStore = SharedDictationStore()
+	private let refiner = TranscriptRefiner()
+	private static let refinementPreferenceKey = "mobile.refineWithOnDeviceModel"
+	/// Defaults on where the model is available; the toggle only has to persist
+	/// an explicit opt-out.
+	@Published var usesOnDeviceRefinement: Bool = UserDefaults.standard
+		.object(forKey: "mobile.refineWithOnDeviceModel") as? Bool ?? true {
+		didSet {
+			UserDefaults.standard.set(usesOnDeviceRefinement, forKey: Self.refinementPreferenceKey)
+		}
+	}
+	@Published private(set) var refinementReadiness: TranscriptRefiner.Readiness = .notReady
+
+	func refreshRefinementReadiness() async {
+		refinementReadiness = await refiner.readiness
+	}
     private var whisperKit: WhisperKit?
     private var modelProfile: ScribeModelProfile?
     private var audioRecorder: AVAudioRecorder?
@@ -627,8 +642,21 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			let results = try await transcribeWithRecovery(audioURL: url)
 			guard transcriptionGeneration == generation else { return }
             let rawText = results.compactMap(\.text).joined(separator: " ")
-            let polishedText = TranscriptPolisher.polish(rawText)
-            guard !polishedText.isEmpty else { throw DictationError.noSpeechDetected }
+            let ruleBasedText = TranscriptPolisher.polish(rawText)
+            guard !ruleBasedText.isEmpty else { throw DictationError.noSpeechDetected }
+
+            // Optional on-device language-model pass for punctuation and
+            // sentence breaks. It returns nil whenever it is unavailable, slow,
+            // or produced anything that is not a faithful cleanup, so the
+            // deterministic result is always the floor rather than the risk.
+            var polishedText = ruleBasedText
+            if usesOnDeviceRefinement {
+                publishStatus(.transcribing, "Polishing your words…")
+                if let refined = await refiner.refine(ruleBasedText) {
+                    polishedText = refined
+                }
+                guard transcriptionGeneration == generation else { return }
+            }
 
 			addToHistory(polishedText)
             state = .completed(polishedText)

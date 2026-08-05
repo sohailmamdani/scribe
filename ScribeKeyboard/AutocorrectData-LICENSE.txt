@@ -3,11 +3,12 @@ English frequency dictionaries distributed with SymSpell:
 
 https://github.com/wolfgarbe/SymSpell
 
-AutocorrectBigrams.txt contains the 8,000 highest-frequency entries from the
-upstream bigram dictionary. AutocorrectWords.txt contains the 20,000
-highest-frequency upstream entries plus the upstream contraction supplement,
-with the UTF-8 byte-order marker removed. The retained spelling/frequency data
-otherwise remains unchanged.
+AutocorrectBigrams.txt contains the entries of the upstream bigram dictionary
+(frequency_bigramdictionary_en_243_342.txt) whose both words appear in
+AutocorrectWords.txt — 236,859 of 242,342 pairs — sorted alphabetically.
+AutocorrectWords.txt contains the 20,000 highest-frequency upstream entries
+plus the upstream contraction supplement, with the UTF-8 byte-order marker
+removed. The retained spelling/frequency data otherwise remains unchanged.
 
 MIT License
 

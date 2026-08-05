@@ -112,10 +112,19 @@ final class KeyboardViewController: UIInputViewController {
         self.hostingController = hostingController
         keyboardHeightConstraint = heightConstraint
 
+        // Warm the lexicon off the main thread so the first correction does not
+        // pay for parsing a quarter of a million bigrams.
+        Task { [autocorrectionEngine] in await autocorrectionEngine.prepare() }
+
         requestSupplementaryLexicon { [weak self] lexicon in
-            // UILexicon is not Sendable, so lift the strings out here and hand
-            // the actor plain values.
-            let entries = lexicon.entries.flatMap { [$0.userInput, $0.documentText] }
+            // UILexicon is not Sendable, so lift the values out here and hand
+            // the actor plain ones.
+            let entries = lexicon.entries.map {
+                KeyboardUserLexiconEntry(
+                    userInput: $0.userInput,
+                    documentText: $0.documentText
+                )
+            }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.autocorrectionEngine.updateSupplementaryLexicon(entries: entries)

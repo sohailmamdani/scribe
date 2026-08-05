@@ -166,7 +166,22 @@ struct MobileContentView: View {
                 }
                 .buttonStyle(.bordered)
             }
+
+            if coordinator.refinementReadiness == .ready {
+                Divider()
+                Toggle(isOn: $coordinator.usesOnDeviceRefinement) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Polish with Apple Intelligence")
+                            .font(.subheadline.weight(.medium))
+                        Text("Adds punctuation and sentence breaks on device. Scribe keeps its own result if the model changes any of your words.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .tint(.indigo)
+            }
         }
+        .task { await coordinator.refreshRefinementReadiness() }
         .padding(18)
         .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }

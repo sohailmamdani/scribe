@@ -1237,7 +1237,8 @@ struct KeyboardRootView: View {
             ) else { return nil }
             return KeyboardCorrection(
                 text: replacement,
-                automaticallyReplaces: suggestion.automaticallyReplaces
+                automaticallyReplaces: suggestion.automaticallyReplaces,
+                isCompletion: suggestion.isCompletion
             )
         }
         correctionCandidates = mapped

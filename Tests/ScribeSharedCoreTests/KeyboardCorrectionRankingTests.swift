@@ -9,7 +9,8 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
         bigramFrequency: Int64 = 0,
         systemRank: Int? = 0,
         spatialCost: Double = 0.3,
-        acceptedCount: Int = 0
+        acceptedCount: Int = 0,
+        changesFirstLetter: Bool = false
     ) -> KeyboardCorrectionCandidate {
         KeyboardCorrectionCandidate(
             word: word,
@@ -18,7 +19,8 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
             bigramFrequency: bigramFrequency,
             systemRank: systemRank,
             spatialCost: spatialCost,
-            acceptedCount: acceptedCount
+            acceptedCount: acceptedCount,
+            changesFirstLetter: changesFirstLetter
         )
     }
 
@@ -210,6 +212,130 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
                 ranked: ranked
             ),
             .suggest
+        )
+    }
+
+    // MARK: - Frequency has to be able to outvote the system spell checker
+
+    /// Real data for "Smple", taken from the bundled lexicon and Apple's own
+    /// guesses. Every candidate is one edit away, so frequency and the shape of
+    /// the edit are all there is to separate them.
+    private func smpleCandidates() -> [KeyboardCorrectionCandidate] {
+        [
+            // Apple lists these first, but they are rare or implausible.
+            candidate("ample", frequency: 3_187_842, systemRank: 0,
+                      spatialCost: KeyboardCorrectionRanking.neutralSpatialCost,
+                      changesFirstLetter: true),
+            candidate("smile", frequency: 13_893_537, systemRank: 1,
+                      spatialCost: KeyboardCorrectionRanking.unreachableSpatialCost),
+            candidate("sample", frequency: 68_957_421, systemRank: 2,
+                      spatialCost: KeyboardCorrectionRanking.neutralSpatialCost),
+            candidate("simple", frequency: 85_617_922, systemRank: 3,
+                      spatialCost: KeyboardCorrectionRanking.neutralSpatialCost),
+        ]
+    }
+
+    /// The reported bug: typing "Smple" offered "Smile", "Sample" and "Ample"
+    /// — the intended word was not in the bar at all. The old weighting left
+    /// all four within 3.3 points, so Apple's ordering decided everything.
+    ///
+    /// The fix demotes the two implausible readings. It deliberately does not
+    /// claim to separate "simple" from "sample": at 85.6M against 69.0M those
+    /// are 1.24× apart, which `log10` compresses to under 2 points, and both
+    /// are a single inserted letter. They are a real tie, and the honest
+    /// outcome is to offer both.
+    func testImplausibleCandidatesAreDemotedBelowThePlausibleOnes() {
+        let ranked = KeyboardCorrectionRanking.rank(smpleCandidates())
+        let top = Set(ranked.prefix(2).map(\.word))
+        XCTAssertEqual(top, ["simple", "sample"])
+
+        // "ample" rewrites the deliberately-shifted opening letter and is 27×
+        // rarer; "smile" needs a tap two keys off target. Both sit below.
+        let order = ranked.map(\.word)
+        for demoted in ["ample", "smile"] {
+            XCTAssertGreaterThan(
+                order.firstIndex(of: demoted) ?? .max,
+                order.firstIndex(of: "sample") ?? 0,
+                "\(demoted) should rank below the plausible readings"
+            )
+        }
+    }
+
+    /// Apple ranked "ample" first and "simple" last for this word. Whatever it
+    /// says, the implausible candidate must not lead.
+    func testSystemOrderingCannotPromoteAnImplausibleCandidate() {
+        let ranked = KeyboardCorrectionRanking.rank(smpleCandidates())
+        XCTAssertNotEqual(ranked.first?.word, "ample")
+    }
+
+    /// Frequency must dominate the system-rank nudge, not the other way round.
+    func testFrequencyOutweighsSystemRank() {
+        let spread = KeyboardCorrectionRanking.score(
+            candidate("ample", frequency: 3_187_842, systemRank: 0)
+        ) - KeyboardCorrectionRanking.score(
+            candidate("simple", frequency: 85_617_922, systemRank: 3)
+        )
+        XCTAssertGreaterThan(spread, 18)
+    }
+
+    /// A word Apple does not offer at all must still be reachable on strength
+    /// of frequency. The old scoring charged it 28 points — more than the whole
+    /// frequency spread — so it could never win.
+    func testAbsenceFromTheSystemListIsANudgeNotAVeto() {
+        let penalty = KeyboardCorrectionRanking.score(candidate("word", systemRank: nil))
+            - KeyboardCorrectionRanking.score(candidate("word", systemRank: 0))
+        XCTAssertLessThanOrEqual(penalty, 10)
+    }
+
+    /// People rarely miss the opening key, especially right after pressing
+    /// Shift for it. That is what keeps "ample" behind "simple".
+    func testRewritingTheFirstLetterIsPenalised() {
+        let cost = KeyboardCorrectionRanking.score(
+            candidate("ample", changesFirstLetter: true)
+        ) - KeyboardCorrectionRanking.score(
+            candidate("ample", changesFirstLetter: false)
+        )
+        XCTAssertEqual(cost, KeyboardCorrectionRanking.firstLetterPenalty, accuracy: 0.001)
+    }
+
+    /// "Smple" is genuinely ambiguous between "simple" and "sample" on letters
+    /// and frequency alone, so it must surface as a suggestion rather than
+    /// silently rewriting itself. Context is what resolves this in real use.
+    func testGenuinelyAmbiguousWordSuggestsRatherThanReplacing() {
+        XCTAssertEqual(
+            KeyboardCorrectionRanking.decision(
+                original: "smple",
+                originalIsKnownWord: false,
+                isProtected: false,
+                ranked: KeyboardCorrectionRanking.rank(smpleCandidates())
+            ),
+            .suggest
+        )
+    }
+
+    /// ...and the bigram that real typing supplies is enough to break the tie.
+    func testContextResolvesTheAmbiguityIntoAnAutomaticCorrection() {
+        var withContext = smpleCandidates()
+        withContext = withContext.map { entry in
+            guard entry.word == "simple" else { return entry }
+            return candidate(
+                "simple",
+                frequency: 85_617_922,
+                bigramFrequency: 12_000_000,
+                systemRank: 3,
+                spatialCost: KeyboardCorrectionRanking.neutralSpatialCost
+            )
+        }
+        let ranked = KeyboardCorrectionRanking.rank(withContext)
+        XCTAssertEqual(ranked.first?.word, "simple")
+        XCTAssertEqual(
+            KeyboardCorrectionRanking.decision(
+                original: "smple",
+                originalIsKnownWord: false,
+                isProtected: false,
+                ranked: ranked
+            ),
+            .autoReplace
         )
     }
 

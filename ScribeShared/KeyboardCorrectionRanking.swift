@@ -20,6 +20,18 @@ struct KeyboardTapEvidence: Equatable, Sendable {
     }
 }
 
+/// One entry from `UILexicon` — the user's contacts and text shortcuts.
+/// `userInput` is what they type, `documentText` what it expands to.
+struct KeyboardUserLexiconEntry: Equatable, Hashable, Sendable {
+    let userInput: String
+    let documentText: String
+
+    init(userInput: String, documentText: String) {
+        self.userInput = userInput
+        self.documentText = documentText
+    }
+}
+
 struct KeyboardCorrectionCandidate: Equatable, Sendable {
     let word: String
     let distance: Int
@@ -31,6 +43,8 @@ struct KeyboardCorrectionCandidate: Equatable, Sendable {
     /// key. Around 1 means one key width away. Higher is less plausible.
     let spatialCost: Double
     let acceptedCount: Int
+    /// Whether the correction rewrites the opening letter.
+    let changesFirstLetter: Bool
 
     init(
         word: String,
@@ -39,7 +53,8 @@ struct KeyboardCorrectionCandidate: Equatable, Sendable {
         bigramFrequency: Int64,
         systemRank: Int?,
         spatialCost: Double,
-        acceptedCount: Int
+        acceptedCount: Int,
+        changesFirstLetter: Bool = false
     ) {
         self.word = word
         self.distance = distance
@@ -48,6 +63,7 @@ struct KeyboardCorrectionCandidate: Equatable, Sendable {
         self.systemRank = systemRank
         self.spatialCost = spatialCost
         self.acceptedCount = acceptedCount
+        self.changesFirstLetter = changesFirstLetter
     }
 }
 
@@ -82,14 +98,43 @@ enum KeyboardCorrectionRanking {
     /// the word rather than repairing it.
     static let minimumLengthForTwoEditAutoReplace = 6
 
+    /// People rarely miss the opening key of a word, and at the start of a
+    /// sentence they have usually just pressed Shift for it deliberately.
+    static let firstLetterPenalty: Double = 25
+
+    /// How much a word's corpus frequency counts.
+    ///
+    /// This was 4, which made frequency almost decorative: for "smple" the
+    /// candidates "simple", "sample" and "ample" landed within 3.3 points of
+    /// each other even though "simple" is 27× commoner than "ample", and
+    /// "ample" led purely because the system spell checker happened to list it
+    /// first. Frequency is the single most reliable prior about which word a
+    /// person meant, and it is stable — unlike the spell checker's ordering,
+    /// which is not reproducible between calls.
+    static let frequencyWeight: Double = 20
+
     static func score(_ candidate: KeyboardCorrectionCandidate) -> Double {
         var score = Double(candidate.distance) * 60
-        score += candidate.spatialCost * 34
-        score += Double(candidate.systemRank ?? 6) * 3
-        score -= log10(Double(max(candidate.frequency, 0)) + 1) * 4
+        // Expressed as a signed adjustment so "no tap evidence" reads as zero
+        // opinion rather than a 34-point charge. This is presentation only: it
+        // shifts every candidate by the same constant, so ranking and margins
+        // are identical either way.
+        //
+        // The real asymmetry it makes visible is unfixed: a same-length swap
+        // can earn evidence down to ~0, while an insertion or deletion changes
+        // the length and can only ever score neutral. Dropping a letter is the
+        // commonest phone typo there is, so it competes about 30 points behind
+        // a well-aimed swap. Closing that needs evidence for the *omitted* key
+        // — whether the finger passed near it — which is not modelled yet.
+        score += (candidate.spatialCost - neutralSpatialCost) * 34
+        if candidate.changesFirstLetter { score += firstLetterPenalty }
+        score -= log10(Double(max(candidate.frequency, 0)) + 1) * frequencyWeight
         score -= log10(Double(max(candidate.bigramFrequency, 0)) + 1) * 8
         score -= Double(min(candidate.acceptedCount, 12)) * 5
-        if candidate.systemRank == nil { score += 10 }
+        // A mild nudge, not a veto. The old form charged an absent word 28
+        // points — more than the entire spread of the frequency signal — so a
+        // word the system checker did not happen to offer could not win.
+        score += Double(candidate.systemRank ?? 4) * 2
         return score
     }
 
