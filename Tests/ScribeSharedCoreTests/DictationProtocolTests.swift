@@ -22,90 +22,11 @@ final class DictationProtocolTests: XCTestCase {
     }
 
     func testEveryRequestHasAUniqueIdentity() throws {
-        let first = try XCTUnwrap(store.issue(.start, clientDocumentID: "messages"))
-        let second = try XCTUnwrap(store.issue(.start, clientDocumentID: "notes"))
+        let first = try XCTUnwrap(store.issue(.start))
+        let second = try XCTUnwrap(store.issue(.start))
 
         XCTAssertNotEqual(first.id, second.id)
-        XCTAssertEqual(first.clientDocumentID, "messages")
-        XCTAssertEqual(second.clientDocumentID, "notes")
         XCTAssertEqual(store.latestRequest, second)
-    }
-
-    func testBackgroundHostCannotClaimItsCurrentTranscript() {
-        let request = DictationRequest(
-            command: .start,
-            id: "request-1",
-            clientDocumentID: "messages"
-        )
-
-        XCTAssertNil(
-            KeyboardTranscriptDeliveryRules.recoverableRequestID(
-                currentRequestID: request.id,
-                currentRequestClientDocumentID: request.clientDocumentID,
-                latestRequest: request,
-                activeClientDocumentID: "messages",
-                hostIsForegroundActive: false
-            )
-        )
-    }
-
-    func testForegroundHostCanClaimItsCurrentTranscript() {
-        let request = DictationRequest(
-            command: .start,
-            id: "request-1",
-            clientDocumentID: "messages"
-        )
-
-        XCTAssertEqual(
-            KeyboardTranscriptDeliveryRules.recoverableRequestID(
-                currentRequestID: request.id,
-                currentRequestClientDocumentID: request.clientDocumentID,
-                latestRequest: request,
-                activeClientDocumentID: "messages",
-                hostIsForegroundActive: true
-            ),
-            request.id
-        )
-    }
-
-    func testRecreatedKeyboardOnlyRecoversItsOwnHostRequest() {
-        let request = DictationRequest(
-            command: .start,
-            id: "request-1",
-            clientDocumentID: "messages"
-        )
-
-        XCTAssertEqual(
-            KeyboardTranscriptDeliveryRules.recoverableRequestID(
-                currentRequestID: nil,
-                currentRequestClientDocumentID: nil,
-                latestRequest: request,
-                activeClientDocumentID: "messages",
-                hostIsForegroundActive: true
-            ),
-            request.id
-        )
-        XCTAssertNil(
-            KeyboardTranscriptDeliveryRules.recoverableRequestID(
-                currentRequestID: nil,
-                currentRequestClientDocumentID: nil,
-                latestRequest: request,
-                activeClientDocumentID: "notes",
-                hostIsForegroundActive: true
-            )
-        )
-        XCTAssertTrue(
-            KeyboardTranscriptDeliveryRules.ownsLatestRequest(
-                request,
-                activeClientDocumentID: "messages"
-            )
-        )
-        XCTAssertFalse(
-            KeyboardTranscriptDeliveryRules.ownsLatestRequest(
-                request,
-                activeClientDocumentID: "notes"
-            )
-        )
     }
 
     func testRequestGateMakesDuplicateDeliveryIdempotent() {

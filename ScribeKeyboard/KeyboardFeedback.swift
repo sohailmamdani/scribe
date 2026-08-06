@@ -2,11 +2,10 @@ import UIKit
 
 /// Haptic feedback for key presses.
 ///
-/// Feedback generators are intentionally left unattached. View-attached
-/// generators install a `UIInteraction` on the host's live input view; that
-/// path can terminate the keyboard extension on physical devices even though
-/// it succeeds in Simulator. Prime UIKit's extension-safe generators after the
-/// keyboard appears and keep the text path independent from feedback delivery.
+/// iOS 17.5 added feedback generators that are attached to a live view. The
+/// old unattached initializers are deprecated and were especially unreliable
+/// in the keyboard-extension process. Keep the generators associated with the
+/// current input view and prime them before the first touch arrives.
 @MainActor
 enum KeyboardHaptics {
     private static var keyTap: UIImpactFeedbackGenerator?
@@ -14,11 +13,11 @@ enum KeyboardHaptics {
     private static var wordCommit: UIImpactFeedbackGenerator?
     private static var notice: UINotificationFeedbackGenerator?
 
-    static func activate() {
-        keyTap = UIImpactFeedbackGenerator(style: .light)
-        deleteRepeat = UIImpactFeedbackGenerator(style: .soft)
-        wordCommit = UIImpactFeedbackGenerator(style: .medium)
-        notice = UINotificationFeedbackGenerator()
+    static func attach(to view: UIView) {
+        keyTap = UIImpactFeedbackGenerator(style: .light, view: view)
+        deleteRepeat = UIImpactFeedbackGenerator(style: .soft, view: view)
+        wordCommit = UIImpactFeedbackGenerator(style: .medium, view: view)
+        notice = UINotificationFeedbackGenerator(view: view)
         prepareForInput()
     }
 

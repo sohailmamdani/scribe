@@ -30,14 +30,12 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let currentClientDocumentID: () -> String? = { [weak self] () -> String? in
-            guard let controller = self else { return nil }
-            return controller.textDocumentProxy.documentIdentifier.uuidString
-        }
-        let hostIsForegroundActive: () -> Bool = { [weak self] in
-            self?.view.window?.windowScene?.activationState == .foregroundActive
-        }
-        let rootView: KeyboardRootView = KeyboardRootView(
+        // UIKit's current feedback API must be associated with the live input
+        // view. Installing it here also primes the engine before SwiftUI begins
+        // handling key touches.
+        KeyboardHaptics.attach(to: view)
+
+        let rootView = KeyboardRootView(
             documentState: documentState,
             insertText: { [weak self] text in self?.textDocumentProxy.insertText(text) },
             deleteBackward: { [weak self] in self?.textDocumentProxy.deleteBackward() },
@@ -96,13 +94,11 @@ final class KeyboardViewController: UIInputViewController {
                     return
                 }
                 self.openContainingApp(url, completion: completion)
-            },
-            clientDocumentID: currentClientDocumentID,
-            hostIsForegroundActive: hostIsForegroundActive
+            }
         )
 
         let hostingController = UIHostingController(rootView: rootView)
-        hostingController.view.backgroundColor = UIColor.clear
+        hostingController.view.backgroundColor = .clear
         addChild(hostingController)
         view.addSubview(hostingController.view)
         hostingController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -149,10 +145,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // Create extension-safe generators only after the keyboard is visible.
-        // Avoid attaching a UIKit interaction to the host's live input view;
-        // that is the hardware-only path implicated by the launch regression.
-        KeyboardHaptics.activate()
+        KeyboardHaptics.prepareForInput()
         updateHostEnvironment()
         updateKeyboardHeight()
     }

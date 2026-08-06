@@ -23,8 +23,6 @@ struct KeyboardRootView: View {
     let recordAcceptedCorrection: (String, String) -> Void
     let recordRejectedCorrection: (String, String) -> Void
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
-    let clientDocumentID: () -> String?
-    let hostIsForegroundActive: () -> Bool
 
     @Environment(\.openURL) private var openURL
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -133,10 +131,7 @@ struct KeyboardRootView: View {
         .animation(.easeOut(duration: 0.14), value: spaceCursorMode)
         .onAppear {
             synchronizeDocumentState()
-            state.start(
-                clientDocumentID: clientDocumentID,
-                hostIsForegroundActive: hostIsForegroundActive
-            ) { transcript in
+            state.start { transcript in
                 let surrounding = context()
                 let insertion = TranscriptPolisher.textForInsertion(
                     transcript,
@@ -1630,11 +1625,8 @@ final class KeyboardDictationState: NSObject, ObservableObject {
     private let store = SharedDictationStore()
     private var timer: Timer?
     private var onTranscript: ((String) -> Void)?
-    private var clientDocumentID: (() -> String?)?
-    private var hostIsForegroundActive: (() -> Bool)?
     private var currentRequestID: String?
     private var currentRequestIssuedAt: Date?
-    private var currentRequestClientDocumentID: String?
     private var localError: String?
 
     private static let acknowledgementTimeout: TimeInterval = 10
@@ -1657,13 +1649,7 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         }
     }
 
-    func start(
-        clientDocumentID: @escaping () -> String?,
-        hostIsForegroundActive: @escaping () -> Bool,
-        onTranscript: @escaping (String) -> Void
-    ) {
-        self.clientDocumentID = clientDocumentID
-        self.hostIsForegroundActive = hostIsForegroundActive
+    func start(onTranscript: @escaping (String) -> Void) {
         self.onTranscript = onTranscript
         refresh()
         timer?.invalidate()
@@ -1709,7 +1695,6 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         _ = beginRequest(.cancel, initialPhase: .idle, message: "")
         currentRequestID = nil
         currentRequestIssuedAt = nil
-        currentRequestClientDocumentID = nil
         phase = .idle
         message = ""
     }
@@ -1718,7 +1703,6 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         _ = beginRequest(.cancel, initialPhase: .idle, message: "")
         currentRequestID = nil
         currentRequestIssuedAt = nil
-        currentRequestClientDocumentID = nil
         phase = .idle
         message = ""
     }
@@ -1744,34 +1728,14 @@ final class KeyboardDictationState: NSObject, ObservableObject {
 
         let status = store.status
         let session = store.session
-        let latestRequest = store.latestRequest
-        let activeClientDocumentID = clientDocumentID?()
-        let isHostForegroundActive = hostIsForegroundActive?() ?? false
         sessionAlive = session.isAlive()
         audioLevel = store.audioLevel
 
-        // A controller can survive a host-document change. Do not let its old
-        // local request identity authorize insertion into the newly active host.
-        if isHostForegroundActive,
-           let currentRequestClientDocumentID,
-           currentRequestClientDocumentID != activeClientDocumentID {
-            currentRequestID = nil
-            currentRequestIssuedAt = nil
-            self.currentRequestClientDocumentID = nil
-        }
-
-        let recoverableResultRequestID = KeyboardTranscriptDeliveryRules.recoverableRequestID(
-            currentRequestID: currentRequestID,
-            currentRequestClientDocumentID: currentRequestClientDocumentID,
-            latestRequest: latestRequest,
-            activeClientDocumentID: activeClientDocumentID,
-            hostIsForegroundActive: isHostForegroundActive
-        )
+        let recoverableResultRequestID = currentRequestID ?? store.latestRequest?.id
         if let claimed = store.claimTranscript(for: recoverableResultRequestID) {
             onTranscript?(claimed.text)
             currentRequestID = nil
             currentRequestIssuedAt = nil
-            currentRequestClientDocumentID = nil
             localError = nil
             phase = .idle
             message = ""
@@ -1802,33 +1766,18 @@ final class KeyboardDictationState: NSObject, ObservableObject {
                     : "Open Scribe once to start a session, then return and tap Retry."
                 retryAvailable = false
             }
-            if let localError {
-                phase = .failed
-                message = localError
-            }
+			if let localError {
+				phase = .failed
+				message = localError
+			}
             return
         }
 
-        if let localError {
-            phase = .failed
-            message = localError
-            return
-        }
-
-        // Status is global App Group state. A recreated keyboard may recover
-        // its own request, but must not mirror another host's in-flight/error
-        // state or claim its eventual result.
-        guard isHostForegroundActive,
-              KeyboardTranscriptDeliveryRules.ownsLatestRequest(
-                latestRequest,
-                activeClientDocumentID: activeClientDocumentID
-              ),
-              status.requestID == latestRequest?.id else {
-            phase = .idle
-            message = ""
-            retryAvailable = false
-            return
-        }
+		if let localError {
+			phase = .failed
+			message = localError
+			return
+		}
 
         // When iOS recreates the extension, recover the app-owned in-flight
         // state instead of assuming the old keyboard process is still alive.
@@ -1844,7 +1793,9 @@ final class KeyboardDictationState: NSObject, ObservableObject {
             }
         } else if status.phase == .failed {
             let age = Date().timeIntervalSince(status.updatedAt)
-            if status.retryAvailable || (-60...15 * 60).contains(age) {
+            let matchesLatestRequest = status.requestID == store.latestRequest?.id
+            if matchesLatestRequest,
+               status.retryAvailable || (-60...15 * 60).contains(age) {
                 apply(status)
             }
         } else if status.phase == .completed, store.isResultConsumed(status.resultID) {
@@ -1865,18 +1816,13 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         message: String
     ) -> Bool {
         localError = nil
-        let requestClientDocumentID = clientDocumentID?()
-        guard let request = store.issue(
-            command,
-            clientDocumentID: requestClientDocumentID
-        ) else {
+        guard let request = store.issue(command) else {
             phase = .failed
             self.message = "Scribe’s shared container is unavailable. Reopen Scribe and try again."
             return false
         }
         currentRequestID = request.id
         currentRequestIssuedAt = request.issuedAt
-        currentRequestClientDocumentID = request.clientDocumentID
         phase = initialPhase
         self.message = message
         retryAvailable = false
@@ -1890,7 +1836,6 @@ final class KeyboardDictationState: NSObject, ObservableObject {
             retryAvailable = false
             currentRequestID = nil
             currentRequestIssuedAt = nil
-            currentRequestClientDocumentID = nil
             return
         }
         phase = status.phase
