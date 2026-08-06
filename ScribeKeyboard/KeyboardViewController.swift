@@ -94,6 +94,27 @@ final class KeyboardViewController: UIInputViewController {
                     return
                 }
                 self.openContainingApp(url, completion: completion)
+            },
+            clientDocumentID: { [weak self] in
+                // Evaluated lazily on refresh ticks, never during setup, and
+                // only while the keyboard is actually in a window — the proxy's
+                // document identity is undefined for a detached keyboard, and
+                // this call site has a crash regression in its history.
+                guard let self, self.view.window != nil else { return nil }
+                return self.textDocumentProxy.documentIdentifier.uuidString
+            },
+            hostIsForegroundActive: { [weak self] in
+                guard let view = self?.view, view.window != nil else { return false }
+                // Insertion also works during the brief foreground-inactive
+                // moments around transitions; only background hosts drop text.
+                switch view.window?.windowScene?.activationState {
+                case .foregroundActive, .foregroundInactive, nil:
+                    return true
+                case .background, .unattached:
+                    return false
+                @unknown default:
+                    return true
+                }
             }
         )
 
@@ -148,6 +169,13 @@ final class KeyboardViewController: UIInputViewController {
         KeyboardHaptics.prepareForInput()
         updateHostEnvironment()
         updateKeyboardHeight()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        // Stop the keep-warm cadence with the keyboard; holding the Taptic
+        // engine prepared past visibility is what the API contract forbids.
+        KeyboardHaptics.detach()
     }
 
     override func textDidChange(_ textInput: (any UITextInput)?) {

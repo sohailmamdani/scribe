@@ -12,6 +12,7 @@ enum KeyboardHaptics {
     private static var deleteRepeat: UIImpactFeedbackGenerator?
     private static var wordCommit: UIImpactFeedbackGenerator?
     private static var notice: UINotificationFeedbackGenerator?
+    private static var keepWarmTimer: Timer?
 
     static func attach(to view: UIView) {
         keyTap = UIImpactFeedbackGenerator(style: .light, view: view)
@@ -21,11 +22,32 @@ enum KeyboardHaptics {
         prepareForInput()
     }
 
-    /// Prime the generators while the keyboard is becoming visible. UIKit's
-    /// generators fall back to a cold start after an idle pause; preparing only
-    /// *after* a key press made that first press the one most likely to feel
-    /// silent.
+    /// Prime the generators while the keyboard is becoming visible, and keep
+    /// them primed for as long as it stays visible.
+    ///
+    /// `prepare()` only holds the Taptic engine warm for a second or two, so
+    /// re-arming after each press was not enough: the first key press after any
+    /// short pause in typing hit a cold engine and produced no feedback — felt
+    /// as haptics randomly coming and going. The cadence below re-prepares
+    /// inside the warmth window for the keyboard's whole lifetime, which is
+    /// exactly the bounded period Apple's docs describe for holding an engine
+    /// prepared. `detach` stops it the moment the keyboard leaves the screen.
     static func prepareForInput() {
+        prepareAll()
+        keepWarmTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.5, repeats: true) { _ in
+            MainActor.assumeIsolated { prepareAll() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        keepWarmTimer = timer
+    }
+
+    static func detach() {
+        keepWarmTimer?.invalidate()
+        keepWarmTimer = nil
+    }
+
+    private static func prepareAll() {
         keyTap?.prepare()
         deleteRepeat?.prepare()
         wordCommit?.prepare()

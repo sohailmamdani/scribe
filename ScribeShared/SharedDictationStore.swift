@@ -21,11 +21,21 @@ struct DictationRequest: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let command: DictationCommand
     let issuedAt: Date
+    /// The host text document the issuing keyboard was attached to. Optional so
+    /// requests written by older builds keep decoding; nil simply means the
+    /// request carries no document affinity.
+    let clientDocumentID: String?
 
-    init(command: DictationCommand, id: String = UUID().uuidString, issuedAt: Date = Date()) {
+    init(
+        command: DictationCommand,
+        id: String = UUID().uuidString,
+        issuedAt: Date = Date(),
+        clientDocumentID: String? = nil
+    ) {
         self.id = id
         self.command = command
         self.issuedAt = issuedAt
+        self.clientDocumentID = clientDocumentID
     }
 
     func isFresh(at date: Date = Date(), maximumAge: TimeInterval = 5 * 60) -> Bool {
@@ -90,6 +100,88 @@ struct DictationSession: Codable, Equatable, Sendable {
 struct ClaimedTranscript: Equatable, Sendable {
     let resultID: String
     let text: String
+}
+
+/// Pure rules for when a keyboard instance may take a finished transcript.
+///
+/// Claiming marks the result consumed for every process sharing the App Group,
+/// and `insertText` on a backgrounded or detached proxy is silently ignored —
+/// so a claim by the wrong instance destroys the transcript. The failure this
+/// prevents: dictation completes, a keyboard instance in another app (or a
+/// recreated one over a different text field) claims it first, and the text
+/// lands nowhere while the store swears it was delivered.
+enum KeyboardTranscriptDelivery {
+    /// The request ID this keyboard may claim automatically, or nil.
+    ///
+    /// Its own in-flight request is always claimable — it asked, and it is the
+    /// insertion target. The recreation fallback (a fresh instance recovering a
+    /// result requested before iOS recreated the extension) is only allowed
+    /// when the request recorded the same host document this keyboard is now
+    /// attached to. Everything requires the host to be frontmost: a background
+    /// keyboard's insert would be dropped.
+    static func autoClaimRequestID(
+        currentRequestID: String?,
+        latestRequest: DictationRequest?,
+        activeDocumentID: String?,
+        hostIsActive: Bool
+    ) -> String? {
+        guard hostIsActive else { return nil }
+        if let currentRequestID { return currentRequestID }
+        guard let latestRequest,
+              let requestDocument = latestRequest.clientDocumentID,
+              let activeDocumentID,
+              requestDocument == activeDocumentID else { return nil }
+        return latestRequest.id
+    }
+
+    /// Whether to offer the user a manual "Insert dictation" action: a
+    /// finished, unconsumed transcript exists, this keyboard could insert it
+    /// right now, but no automatic claim is justified (usually because the
+    /// document identifier changed across an app switch). One visible tap
+    /// beats a silent loss.
+    static func hasRecoverableResult(
+        status: DictationStatus,
+        isConsumed: Bool,
+        currentRequestID: String?,
+        autoClaimRequestID: String?,
+        hostIsActive: Bool,
+        now: Date = Date(),
+        maximumAge: TimeInterval = 15 * 60
+    ) -> Bool {
+        guard hostIsActive,
+              currentRequestID == nil,
+              status.phase == .completed,
+              !isConsumed,
+              status.transcript?.isEmpty == false,
+              autoClaimRequestID != status.requestID else {
+            return false
+        }
+        let age = now.timeIntervalSince(status.updatedAt)
+        return age >= -60 && age <= maximumAge
+    }
+
+    /// How long a keyboard tolerates an in-flight status that has stopped
+    /// updating before offering Retry.
+    ///
+    /// The live-session variants exist because the old rule skipped timeouts
+    /// entirely whenever the session heartbeat was alive — a wedged-but-alive
+    /// app therefore pinned every keyboard at "Polishing your words…" forever.
+    /// These measure *staleness of the status*, not total duration: the app
+    /// publishes progress throughout model downloads and long transcriptions,
+    /// so only a genuine stall trips them.
+    static func inFlightStallTimeout(
+        phase: DictationPhase,
+        sessionAlive: Bool
+    ) -> TimeInterval {
+        switch phase {
+        case .preparing:
+            sessionAlive ? 100 : 45
+        case .transcribing:
+            5 * 60
+        case .idle, .launching, .recording, .completed, .failed:
+            sessionAlive ? 20 : 10
+        }
+    }
 }
 
 struct DictationRequestGate: Equatable, Sendable {
@@ -160,9 +252,17 @@ struct SharedDictationStore: @unchecked Sendable {
     }
 
     @discardableResult
-    func issue(_ command: DictationCommand, at date: Date = Date()) -> DictationRequest? {
+    func issue(
+        _ command: DictationCommand,
+        clientDocumentID: String? = nil,
+        at date: Date = Date()
+    ) -> DictationRequest? {
         guard defaults != nil else { return nil }
-        let request = DictationRequest(command: command, issuedAt: date)
+        let request = DictationRequest(
+            command: command,
+            issuedAt: date,
+            clientDocumentID: clientDocumentID
+        )
         write(request, forKey: Key.request)
         return request
     }

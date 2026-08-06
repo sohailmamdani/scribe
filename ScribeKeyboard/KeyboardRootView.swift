@@ -23,6 +23,8 @@ struct KeyboardRootView: View {
     let recordAcceptedCorrection: (String, String) -> Void
     let recordRejectedCorrection: (String, String) -> Void
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
+    let clientDocumentID: () -> String?
+    let hostIsForegroundActive: () -> Bool
 
     @Environment(\.openURL) private var openURL
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -131,19 +133,23 @@ struct KeyboardRootView: View {
         .animation(.easeOut(duration: 0.14), value: spaceCursorMode)
         .onAppear {
             synchronizeDocumentState()
-            state.start { transcript in
-                let surrounding = context()
-                let insertion = TranscriptPolisher.textForInsertion(
-                    transcript,
-                    contextBefore: surrounding.0,
-                    contextAfter: surrounding.1
-                )
-				proxyInsertText(insertion)
-                lastInsertedText = insertion
-                // Dictated text arrives with no taps behind it.
-                tapEvidence = []
-                refreshAutomaticShift()
-            }
+            state.start(
+                onTranscript: { transcript in
+                    let surrounding = context()
+                    let insertion = TranscriptPolisher.textForInsertion(
+                        transcript,
+                        contextBefore: surrounding.0,
+                        contextAfter: surrounding.1
+                    )
+                    proxyInsertText(insertion)
+                    lastInsertedText = insertion
+                    // Dictated text arrives with no taps behind it.
+                    tapEvidence = []
+                    refreshAutomaticShift()
+                },
+                clientDocumentID: clientDocumentID,
+                hostIsActive: hostIsForegroundActive
+            )
         }
         .onChange(of: documentState.textRevision) { _, _ in
             synchronizeDocumentState()
@@ -1427,6 +1433,31 @@ struct KeyboardRootView: View {
                         }
                     }
                     compactDictationButton
+                } else if state.recoverableTranscriptAvailable {
+                    // A dictation finished but its keyboard went away before it
+                    // could insert (typically an app switch mid-dictation). Ask
+                    // rather than guess: inserting into the wrong document is
+                    // how transcripts used to vanish.
+                    Button {
+                        state.discardRecoveredTranscript()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 32, height: 32)
+                    }
+                    .accessibilityLabel("Discard the finished dictation")
+                    Button {
+                        state.insertRecoveredTranscript()
+                    } label: {
+                        Label("Insert finished dictation", systemImage: "text.insert")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .padding(.horizontal, 14)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .background(Color.indigo.gradient, in: Capsule())
+                    }
                 } else {
                     Image(systemName: state.sessionAlive ? "mic.badge.plus" : "lock.fill")
                         .font(.caption)
@@ -1621,36 +1652,39 @@ final class KeyboardDictationState: NSObject, ObservableObject {
     @Published private(set) var audioLevel: Double = 0
     @Published private(set) var retryAvailable = false
     @Published private(set) var sessionAlive = false
+    /// A finished transcript exists that this keyboard could insert but must
+    /// not take automatically (see `KeyboardTranscriptDelivery`). Rendered as
+    /// an explicit "Insert dictation" action.
+    @Published private(set) var recoverableTranscriptAvailable = false
 
     private let store = SharedDictationStore()
     private var timer: Timer?
     private var onTranscript: ((String) -> Void)?
+    /// The host document the keyboard is currently attached to. Supplied by
+    /// the view controller; evaluated lazily on each refresh tick because the
+    /// proxy's document can change under a live keyboard.
+    private var clientDocumentID: (() -> String?) = { nil }
+    /// Whether the host scene can actually accept `insertText` right now.
+    private var hostIsActive: (() -> Bool) = { false }
     private var currentRequestID: String?
     private var currentRequestIssuedAt: Date?
     private var localError: String?
 
     private static let acknowledgementTimeout: TimeInterval = 10
-    private static let coldStartTimeout: TimeInterval = 45
-    private static let transcriptionTimeout: TimeInterval = 5 * 60
 
     var currentRequestNeedsWake: Bool {
         guard let currentRequestID else { return false }
         return store.status.requestID != currentRequestID
     }
 
-    private static func inFlightTimeout(for phase: DictationPhase) -> TimeInterval {
-        switch phase {
-        case .preparing:
-            coldStartTimeout
-        case .transcribing:
-            transcriptionTimeout
-        case .idle, .launching, .recording, .completed, .failed:
-            acknowledgementTimeout
-        }
-    }
-
-    func start(onTranscript: @escaping (String) -> Void) {
+    func start(
+        onTranscript: @escaping (String) -> Void,
+        clientDocumentID: @escaping () -> String?,
+        hostIsActive: @escaping () -> Bool
+    ) {
         self.onTranscript = onTranscript
+        self.clientDocumentID = clientDocumentID
+        self.hostIsActive = hostIsActive
         refresh()
         timer?.invalidate()
         timer = Timer.scheduledTimer(
@@ -1731,23 +1765,33 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         sessionAlive = session.isAlive()
         audioLevel = store.audioLevel
 
-        let recoverableResultRequestID = currentRequestID ?? store.latestRequest?.id
-        if let claimed = store.claimTranscript(for: recoverableResultRequestID) {
-            onTranscript?(claimed.text)
-            currentRequestID = nil
-            currentRequestIssuedAt = nil
-            localError = nil
-            phase = .idle
-            message = ""
-            retryAvailable = false
+        let hostActive = hostIsActive()
+        let autoClaimID = KeyboardTranscriptDelivery.autoClaimRequestID(
+            currentRequestID: currentRequestID,
+            latestRequest: store.latestRequest,
+            activeDocumentID: clientDocumentID(),
+            hostIsActive: hostActive
+        )
+        if let claimed = store.claimTranscript(for: autoClaimID) {
+            deliver(claimed.text)
             return
         }
+        recoverableTranscriptAvailable = KeyboardTranscriptDelivery.hasRecoverableResult(
+            status: status,
+            isConsumed: store.isResultConsumed(status.resultID),
+            currentRequestID: currentRequestID,
+            autoClaimRequestID: autoClaimID,
+            hostIsActive: hostActive
+        )
 
         if let currentRequestID {
             if status.requestID == currentRequestID {
                 let age = Date().timeIntervalSince(status.updatedAt)
-                let timeout = Self.inFlightTimeout(for: status.phase)
-                if status.isInFlight, !sessionAlive, age > timeout {
+                let timeout = KeyboardTranscriptDelivery.inFlightStallTimeout(
+                    phase: status.phase,
+                    sessionAlive: sessionAlive
+                )
+                if status.isInFlight, age > timeout {
                     phase = .failed
                     message = "Scribe stopped before finishing. Tap Retry to reconnect."
                     retryAvailable = status.retryAvailable
@@ -1783,8 +1827,11 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         // state instead of assuming the old keyboard process is still alive.
         if status.isInFlight {
             let age = Date().timeIntervalSince(status.updatedAt)
-            let timeout = Self.inFlightTimeout(for: status.phase)
-            if !sessionAlive, age > timeout {
+            let timeout = KeyboardTranscriptDelivery.inFlightStallTimeout(
+                phase: status.phase,
+                sessionAlive: sessionAlive
+            )
+            if age > timeout {
                 phase = .failed
                 message = "Scribe stopped before finishing. Tap Retry to reconnect."
                 retryAvailable = status.retryAvailable
@@ -1809,6 +1856,34 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         }
     }
 
+    private func deliver(_ transcript: String) {
+        onTranscript?(transcript)
+        currentRequestID = nil
+        currentRequestIssuedAt = nil
+        localError = nil
+        phase = .idle
+        message = ""
+        retryAvailable = false
+        recoverableTranscriptAvailable = false
+    }
+
+    /// The explicit path for a transcript the automatic rules would not touch.
+    /// The user's tap is the proof of intent the document match could not give.
+    func insertRecoveredTranscript() {
+        guard let claimed = store.claimTranscript(for: store.status.requestID) else {
+            recoverableTranscriptAvailable = false
+            return
+        }
+        deliver(claimed.text)
+    }
+
+    /// Dismisses a recoverable transcript without inserting it, consuming the
+    /// result so it stops following the user from app to app.
+    func discardRecoveredTranscript() {
+        _ = store.claimTranscript(for: store.status.requestID)
+        recoverableTranscriptAvailable = false
+    }
+
     @discardableResult
     private func beginRequest(
         _ command: DictationCommand,
@@ -1816,7 +1891,11 @@ final class KeyboardDictationState: NSObject, ObservableObject {
         message: String
     ) -> Bool {
         localError = nil
-        guard let request = store.issue(command) else {
+        // Every command carries the document affinity: results are published
+        // for the ID of the *last* request in the exchange (usually .stop), so
+        // the stop must be tagged as well as the start for recreation recovery
+        // to match.
+        guard let request = store.issue(command, clientDocumentID: clientDocumentID()) else {
             phase = .failed
             self.message = "Scribe’s shared container is unavailable. Reopen Scribe and try again."
             return false

@@ -90,6 +90,10 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	private var sessionOnlyCompatibilityFallback = false
 	private static let savedRecordingMessage = "Transcription failed, but your recording is saved. Tap Retry."
 	private static let sessionDuration: TimeInterval = 15 * 60
+	/// Generous enough for a long utterance on Large-v3 plus a model reload;
+	/// far shorter than "forever", which is what a hang previously got.
+	private static let transcriptionWatchdogTimeout: Duration = .seconds(240)
+	private var transcriptionWorkTask: Task<[TranscriptionResult], Error>?
 
     override init() {
         super.init()
@@ -646,7 +650,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
         }
 
         do {
-			let results = try await transcribeWithRecovery(audioURL: url)
+			let results = try await runTranscriptionWithWatchdog(audioURL: url)
 			guard transcriptionGeneration == generation else { return }
             let rawText = results.compactMap(\.text).joined(separator: " ")
             let ruleBasedText = TranscriptPolisher.polish(rawText)
@@ -694,6 +698,47 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			currentRequestID = nil
         }
     }
+
+	/// Transcription may never wedge this coordinator.
+	///
+	/// `isTranscribing` is cleared by `processPendingRecording`'s defer — which
+	/// only runs if the awaited transcription *returns*. A hang inside model
+	/// loading or CoreML (most commonly when the app is transcribing in the
+	/// background) left the flag set forever, so every later request from any
+	/// app was rejected as busy: dictation visibly recorded, then nothing ever
+	/// pasted again until the process died. The watchdog turns a hang into an
+	/// ordinary failure: the recording stays saved, Retry works, and the next
+	/// attempt starts on a fresh engine.
+	private func runTranscriptionWithWatchdog(audioURL: URL) async throws -> [TranscriptionResult] {
+		let work = Task { [weak self] () throws -> [TranscriptionResult] in
+			guard let self else { throw DictationError.modelUnavailable }
+			return try await self.transcribeWithRecovery(audioURL: audioURL)
+		}
+		transcriptionWorkTask = work
+		defer { transcriptionWorkTask = nil }
+
+		return try await withThrowingTaskGroup(of: [TranscriptionResult]?.self) { group in
+			group.addTask { try await work.value }
+			group.addTask {
+				try? await Task.sleep(for: Self.transcriptionWatchdogTimeout)
+				return nil
+			}
+			defer { group.cancelAll() }
+			guard let first = try await group.next(), let results = first else {
+				work.cancel()
+				// The hung task may be stuck inside CoreML and unable to observe
+				// cancellation. Abandon the engine reference so the next attempt
+				// loads a clean one instead of sharing a wedged instance; the old
+				// task still holds its own reference and simply gets discarded by
+				// its generation check if it ever completes.
+				logger.error("Transcription watchdog fired; abandoning the current engine")
+				whisperKit = nil
+				modelProfile = nil
+				throw DictationError.transcriptionTimedOut
+			}
+			return results
+		}
+	}
 
     func cancelRecording() {
 		recordingStartGeneration = nil
@@ -767,10 +812,16 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	}
 
 	private func prepareModelIfNeeded(profile: ScribeModelProfile) async throws {
+		// Waiting on another caller's preparation must be bounded. This loop
+		// used to spin forever, so one wedged load turned every subsequent
+		// dictation into a silent wait.
+		var waitAttempts = 0
 		while true {
 			if whisperKit != nil, modelProfile == profile { return }
 
 			if isPreparingModel {
+				waitAttempts += 1
+				guard waitAttempts < 1_200 else { throw DictationError.modelUnavailable }
 				try await Task.sleep(for: .milliseconds(100))
 				continue
 			}
@@ -1504,6 +1555,10 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			return
 		}
 		transcriptionGeneration = nil
+		// Cancel the in-flight work as well: without this, the abandoned task
+		// kept running and kept `isTranscribing` set, busy-failing every later
+		// request from every app.
+		transcriptionWorkTask?.cancel()
 		let message = "iOS paused Scribe before transcription finished. Your recording is saved—tap Retry."
 		state = .failed(message)
 		canRetryFailedTranscription = pendingRecordingURL != nil
@@ -1587,6 +1642,7 @@ private enum DictationError: LocalizedError {
     case insufficientModelStorage
 	case incompleteModelDownload([String])
     case noSpeechDetected
+	case transcriptionTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -1600,6 +1656,8 @@ private enum DictationError: LocalizedError {
 			"The High Accuracy download is incomplete: \(components.joined(separator: ", "))."
         case .noSpeechDetected:
             "Scribe didn’t hear any speech. Please try again."
+		case .transcriptionTimedOut:
+			"Transcription took too long. Your recording is saved — tap Retry."
         }
     }
 
@@ -1609,7 +1667,7 @@ private enum DictationError: LocalizedError {
 			"High Accuracy needs about 1.9 GB free. Free some storage, then try again."
 		case .incompleteModelDownload:
 			"High Accuracy found an incomplete cache. Tap Try High Accuracy again — Scribe will repair and resume it."
-		case .modelUnavailable, .recordingDidNotStart, .noSpeechDetected:
+		case .modelUnavailable, .recordingDidNotStart, .noSpeechDetected, .transcriptionTimedOut:
 			errorDescription ?? "High Accuracy couldn’t finish. Tap Try High Accuracy again."
 		}
 	}
