@@ -30,12 +30,14 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // UIKit's current feedback API must be associated with the live input
-        // view. Installing it here also primes the engine before SwiftUI begins
-        // handling key touches.
-        KeyboardHaptics.attach(to: view)
-
-        let rootView = KeyboardRootView(
+        let currentClientDocumentID: () -> String? = { [weak self] () -> String? in
+            guard let controller = self else { return nil }
+            return controller.textDocumentProxy.documentIdentifier.uuidString
+        }
+        let hostIsForegroundActive: () -> Bool = { [weak self] in
+            self?.view.window?.windowScene?.activationState == .foregroundActive
+        }
+        let rootView: KeyboardRootView = KeyboardRootView(
             documentState: documentState,
             insertText: { [weak self] text in self?.textDocumentProxy.insertText(text) },
             deleteBackward: { [weak self] in self?.textDocumentProxy.deleteBackward() },
@@ -94,11 +96,13 @@ final class KeyboardViewController: UIInputViewController {
                     return
                 }
                 self.openContainingApp(url, completion: completion)
-            }
+            },
+            clientDocumentID: currentClientDocumentID,
+            hostIsForegroundActive: hostIsForegroundActive
         )
 
         let hostingController = UIHostingController(rootView: rootView)
-        hostingController.view.backgroundColor = .clear
+        hostingController.view.backgroundColor = UIColor.clear
         addChild(hostingController)
         view.addSubview(hostingController.view)
         hostingController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -145,7 +149,13 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        KeyboardHaptics.prepareForInput()
+        // `viewDidLoad` runs before the keyboard has a window. UIKit's modern
+        // feedback generators are view-attached, so create them only now that
+        // the actual SwiftUI touch surface belongs to a live window.
+        let hapticView = hostingController?.view.window == nil
+            ? view
+            : hostingController?.view
+        KeyboardHaptics.attach(to: hapticView ?? view)
         updateHostEnvironment()
         updateKeyboardHeight()
     }

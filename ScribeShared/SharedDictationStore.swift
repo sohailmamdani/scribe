@@ -21,16 +21,56 @@ struct DictationRequest: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let command: DictationCommand
     let issuedAt: Date
+    /// The host document that opened Scribe. This keeps a keyboard instance in
+    /// another app from observing or consuming a result it did not request.
+    let clientDocumentID: String?
 
-    init(command: DictationCommand, id: String = UUID().uuidString, issuedAt: Date = Date()) {
+    init(
+        command: DictationCommand,
+        id: String = UUID().uuidString,
+        issuedAt: Date = Date(),
+        clientDocumentID: String? = nil
+    ) {
         self.id = id
         self.command = command
         self.issuedAt = issuedAt
+        self.clientDocumentID = clientDocumentID
     }
 
     func isFresh(at date: Date = Date(), maximumAge: TimeInterval = 5 * 60) -> Bool {
         let age = date.timeIntervalSince(issuedAt)
         return age >= -60 && age <= maximumAge
+    }
+}
+
+/// Pure delivery rules shared with tests. Results are only eligible while the
+/// originating host is accepting input; otherwise `insertText` can be ignored
+/// while the globally shared result is still marked consumed.
+enum KeyboardTranscriptDeliveryRules {
+    static func recoverableRequestID(
+        currentRequestID: String?,
+        currentRequestClientDocumentID: String?,
+        latestRequest: DictationRequest?,
+        activeClientDocumentID: String?,
+        hostIsForegroundActive: Bool
+    ) -> String? {
+        guard hostIsForegroundActive, let activeClientDocumentID else { return nil }
+
+        if let currentRequestID,
+           currentRequestClientDocumentID == activeClientDocumentID {
+            return currentRequestID
+        }
+
+        guard latestRequest?.clientDocumentID == activeClientDocumentID else { return nil }
+        return latestRequest?.id
+    }
+
+    static func ownsLatestRequest(
+        _ latestRequest: DictationRequest?,
+        activeClientDocumentID: String?
+    ) -> Bool {
+        guard let activeClientDocumentID else { return false }
+        return latestRequest?.clientDocumentID == activeClientDocumentID
     }
 }
 
@@ -160,9 +200,17 @@ struct SharedDictationStore: @unchecked Sendable {
     }
 
     @discardableResult
-    func issue(_ command: DictationCommand, at date: Date = Date()) -> DictationRequest? {
+    func issue(
+        _ command: DictationCommand,
+        clientDocumentID: String? = nil,
+        at date: Date = Date()
+    ) -> DictationRequest? {
         guard defaults != nil else { return nil }
-        let request = DictationRequest(command: command, issuedAt: date)
+        let request = DictationRequest(
+            command: command,
+            issuedAt: date,
+            clientDocumentID: clientDocumentID
+        )
         write(request, forKey: Key.request)
         return request
     }
