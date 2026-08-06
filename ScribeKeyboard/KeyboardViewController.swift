@@ -149,13 +149,10 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // `viewDidLoad` runs before the keyboard has a window. UIKit's modern
-        // feedback generators are view-attached, so create them only now that
-        // the actual SwiftUI touch surface belongs to a live window.
-        let hapticView = hostingController?.view.window == nil
-            ? view
-            : hostingController?.view
-        KeyboardHaptics.attach(to: hapticView ?? view)
+        // Create extension-safe generators only after the keyboard is visible.
+        // Avoid attaching a UIKit interaction to the host's live input view;
+        // that is the hardware-only path implicated by the launch regression.
+        KeyboardHaptics.activate()
         updateHostEnvironment()
         updateKeyboardHeight()
     }
