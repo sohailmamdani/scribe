@@ -96,12 +96,8 @@ final class KeyboardViewController: UIInputViewController {
                 self.openContainingApp(url, completion: completion)
             },
             clientDocumentID: { [weak self] in
-                // Evaluated lazily on refresh ticks, never during setup, and
-                // only while the keyboard is actually in a window — the proxy's
-                // document identity is undefined for a detached keyboard, and
-                // this call site has a crash regression in its history.
                 guard let self, self.view.window != nil else { return nil }
-                return self.textDocumentProxy.documentIdentifier.uuidString
+                return Self.safeDocumentIdentifier(of: self.textDocumentProxy)
             },
             hostIsForegroundActive: { [weak self] in
                 guard let view = self?.view, view.window != nil else { return false }
@@ -188,6 +184,24 @@ final class KeyboardViewController: UIInputViewController {
         super.selectionDidChange(textInput)
         updateHostEnvironment()
         documentState.selectionChanged()
+    }
+
+    /// Reads `documentIdentifier` without letting Swift's importer unwrap it.
+    ///
+    /// The property is declared non-optional `UUID`, but early in keyboard
+    /// startup the underlying ObjC accessor returns nil, and the direct Swift
+    /// call then traps in `UUID._unconditionallyBridgeFromObjectiveC` — the
+    /// exact launch crash captured in ScribeKeyboard-2026-08-05/06 .ips
+    /// reports, and the reason the first attempt at document-scoped delivery
+    /// was rolled back. Key-value coding calls the same getter but passes the
+    /// nil through as an absent value instead of force-bridging it.
+    private static func safeDocumentIdentifier(of proxy: UITextDocumentProxy) -> String? {
+        guard let object = proxy as? NSObject,
+              object.responds(to: NSSelectorFromString("documentIdentifier")),
+              let uuid = object.value(forKey: "documentIdentifier") as? UUID else {
+            return nil
+        }
+        return uuid.uuidString
     }
 
     private func updateHostEnvironment() {
