@@ -28,10 +28,9 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	@Published private(set) var canRetryFailedTranscription = false
 	@Published private(set) var isSessionActive = false
 	@Published private(set) var sessionExpiresAt: Date?
-	@Published private(set) var activeModelName = "Preparing High Accuracy model"
+	@Published private(set) var activeModelName = "Preparing the transcription model"
 	@Published private(set) var modelInstallationProgress: Double?
 	@Published private(set) var modelInstallationMessage = ""
-	var isUsingCompatibilityModel: Bool { modelProfile == .compatibility }
 	var hasLoadedModel: Bool { whisperKit != nil }
 
     private let logger = Logger(subsystem: "sohail.Scribe.mobile", category: "Dictation")
@@ -52,15 +51,11 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		refinementReadiness = await refiner.readiness
 	}
     private var whisperKit: WhisperKit?
-    private var modelProfile: ScribeModelProfile?
     private var audioRecorder: AVAudioRecorder?
     private var recordingURL: URL?
 	private var pendingRecordingURL: URL?
     private var meterTask: Task<Void, Never>?
 	private var sessionTask: Task<Void, Never>?
-	private var qualityInstallTask: Task<Void, Never>?
-	private var qualityInstallGeneration: UUID?
-	private var qualityRetryGeneration: UUID?
 	private var preparationHeartbeatTask: Task<Void, Never>?
 	private var keepAliveEngine: AVAudioEngine?
     private var interruptionObserver: NSObjectProtocol?
@@ -77,17 +72,15 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	private var currentRequestID: String?
 	private var requestGate = DictationRequestGate()
 	private let pendingRecordingPathKey = "mobile.pendingRecordingPath"
-	private let fallbackSignatureKey = "mobile.modelFallback.signature.v3"
-	private let fallbackFailureCountKey = "mobile.modelFallback.consecutiveFailures.v3"
-	private let fallbackLastFailureKey = "mobile.modelFallback.lastFailureAt.v3"
+	/// Keys written by builds that still had a fallback model. The fallback is
+	/// gone; the keys just get cleaned up.
 	private let legacyPreferenceKeys = [
 		"mobile.preferCompatibilityModel",
 		"mobile.compatibilityProfileSignature.v2",
+		"mobile.modelFallback.signature.v3",
+		"mobile.modelFallback.consecutiveFailures.v3",
+		"mobile.modelFallback.lastFailureAt.v3",
 	]
-	/// Set when High Accuracy fails during this launch. It keeps the current
-	/// session on Base without writing anything durable, so relaunching always
-	/// gives the quality model another chance.
-	private var sessionOnlyCompatibilityFallback = false
 	private static let savedRecordingMessage = "Transcription failed, but your recording is saved. Tap Retry."
 	private static let sessionDuration: TimeInterval = 15 * 60
 	/// Generous enough for a long utterance on Large-v3 plus a model reload;
@@ -97,9 +90,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
     override init() {
         super.init()
-		// Earlier builds stored a sticky downgrade that permanently trapped
-		// devices on Base after a single transient fault. Version 3 replaces it
-		// with a lapsing, failure-counted policy and discards the old keys.
+		removeObsoleteModelCaches()
 		for key in legacyPreferenceKeys {
 			UserDefaults.standard.removeObject(forKey: key)
 		}
@@ -176,7 +167,6 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	deinit {
 		meterTask?.cancel()
 		sessionTask?.cancel()
-		qualityInstallTask?.cancel()
 		preparationHeartbeatTask?.cancel()
 		if let keepAliveEngine {
 			keepAliveEngine.inputNode.removeTap(onBus: 0)
@@ -297,6 +287,12 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
             // the option, iOS captures from the wideband built-in mic while
             // Bluetooth playback continues undisturbed.
             try session.setCategory(.record, mode: .measurement)
+            // iOS silences every haptic on the device while a recording
+            // session is active unless the session opts out. Scribe's flow
+            // session keeps this recording route alive for up to 15 minutes
+            // after a dictation, which is why keyboard haptics died the moment
+            // a dictation ran and stayed dead until the session lapsed.
+            try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
             try session.setActive(true)
         } catch {
             presentRecordingFailure(error)
@@ -691,7 +687,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			currentRequestID = nil
         } catch {
 			guard transcriptionGeneration == generation else { return }
-			logger.error("Transcription failed after compatibility retry: \(error.localizedDescription, privacy: .public)")
+			logger.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
 			state = .failed(Self.savedRecordingMessage)
 			canRetryFailedTranscription = true
 			publishFailure(Self.savedRecordingMessage, for: resultRequestID, retryAvailable: true)
@@ -712,7 +708,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	private func runTranscriptionWithWatchdog(audioURL: URL) async throws -> [TranscriptionResult] {
 		let work = Task { [weak self] () throws -> [TranscriptionResult] in
 			guard let self else { throw DictationError.modelUnavailable }
-			return try await self.transcribeWithRecovery(audioURL: audioURL)
+			return try await self.transcribe(audioURL: audioURL)
 		}
 		transcriptionWorkTask = work
 		defer { transcriptionWorkTask = nil }
@@ -733,7 +729,6 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 				// its generation check if it ever completes.
 				logger.error("Transcription watchdog fired; abandoning the current engine")
 				whisperKit = nil
-				modelProfile = nil
 				throw DictationError.transcriptionTimedOut
 			}
 			return results
@@ -778,46 +773,22 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		}
     }
 
-	private var osMajorVersion: Int {
-		ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-	}
-
-	private var storedFallbackState: ScribeModelFallbackState {
-		let defaults = UserDefaults.standard
-		let lastFailure = defaults.object(forKey: fallbackLastFailureKey) as? Date
-		return ScribeModelFallbackState(
-			signature: defaults.string(forKey: fallbackSignatureKey),
-			consecutiveFailures: defaults.integer(forKey: fallbackFailureCountKey),
-			lastFailureAt: lastFailure
-		)
-	}
-
-	/// What the stored policy says this device should use across launches,
-	/// ignoring any in-session fallback. Background installation follows this so
-	/// a failed *load* never stops a perfectly healthy *download*.
-	private var durableModelProfile: ScribeModelProfile {
-		ScribeModelFallbackPolicy.preferredProfile(
-			fallbackState: storedFallbackState,
-			osMajorVersion: osMajorVersion
-		)
-	}
-
-	private var preferredModelProfile: ScribeModelProfile {
-		sessionOnlyCompatibilityFallback ? .compatibility : durableModelProfile
-	}
-
 	private var modelDownloadBase: URL {
+		// Documents survives app updates and TestFlight installs, which is what
+		// keeps the ~945 MB model from re-downloading on every build. The other
+		// half of that contract is the folder and marker names pinned in
+		// ScribeModelPolicy.
 		FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 			.appendingPathComponent("huggingface", isDirectory: true)
 	}
 
-	private func prepareModelIfNeeded(profile: ScribeModelProfile) async throws {
+	private func prepareModelIfNeeded() async throws {
 		// Waiting on another caller's preparation must be bounded. This loop
 		// used to spin forever, so one wedged load turned every subsequent
 		// dictation into a silent wait.
 		var waitAttempts = 0
 		while true {
-			if whisperKit != nil, modelProfile == profile { return }
+			if whisperKit != nil { return }
 
 			if isPreparingModel {
 				waitAttempts += 1
@@ -828,45 +799,20 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 			isPreparingModel = true
 			defer { isPreparingModel = false }
-			let previousProfile = modelProfile
-			await unloadCurrentModel()
-			do {
-				let preparedKit = try await makeWhisperKit(profile: profile)
-				whisperKit = preparedKit
-				modelProfile = profile
-				activeModelName = profile.displayName
-				modelInstallationProgress = nil
-				if profile == .highAccuracy {
-					// A working load clears the failure history outright, so an
-					// old transient fault cannot accumulate toward a downgrade.
-					recordHighAccuracySuccess()
-					modelInstallationMessage = "High Accuracy model ready"
-				} else {
-					modelInstallationMessage = "Compatibility model ready"
-				}
-				return
-			} catch {
-				// Switching models must never destroy a known-good engine. This is
-				// especially important when a downloaded Large-v3 model fails during
-				// first-device prewarm: restore Base before exposing the failure.
-				if let previousProfile {
-					do {
-						let restoredKit = try await makeWhisperKit(
-							profile: previousProfile,
-							honorsCancellation: false
-						)
-						whisperKit = restoredKit
-						modelProfile = previousProfile
-						activeModelName = previousProfile.displayName
-					} catch {
-						logger.error("Could not restore the previous transcription model: \(error.localizedDescription, privacy: .public)")
-					}
-				}
-				throw error
-			}
+			let preparedKit = try await makeWhisperKit()
+			whisperKit = preparedKit
+			activeModelName = ScribeModelPolicy.displayName
+			modelInstallationProgress = nil
+			modelInstallationMessage = "Transcription model ready"
+			return
 		}
 	}
 
+	/// There is intentionally no fallback here. The old path switched to a
+	/// Whisper Base model whenever this failed — which turned every transient
+	/// background-load hiccup into silently degraded transcripts for the rest
+	/// of the session. A failure now surfaces as a failure, the recording is
+	/// preserved, and Retry tries the real model again.
 	private func prepareModelWithRecovery() async throws {
 		let ownsHeartbeat = startPreparationHeartbeatIfNeeded()
 		// A live flow session lets the keyboard start a dictation while Scribe
@@ -879,61 +825,23 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			if ownsHeartbeat { stopPreparationHeartbeat() }
 			if ownsAssertion { endModelPreparationTask() }
 		}
-
-		let preferredProfile = preferredModelProfile
-		if preferredProfile == .highAccuracy,
-		   downloadedModelFolder(for: .highAccuracy) == nil,
-		   localCompatibilityModelFolder() != nil {
-			// Existing users already have Base. Keep dictation immediately
-			// available while the 1.6 GB quality model installs in parallel.
-			try await prepareModelIfNeeded(profile: .compatibility)
-			stageHighAccuracyModelIfNeeded()
-			return
-		}
-
-		do {
-			try await prepareModelIfNeeded(profile: preferredProfile)
-		} catch {
-			guard preferredProfile == .highAccuracy else { throw error }
-			logger.warning("High Accuracy model preparation failed; switching to Base: \(error.localizedDescription, privacy: .public)")
-			recordHighAccuracyFailure()
-			updateModelPreparationStatus("Switching to the reliable on-device fallback…")
-			try await prepareModelIfNeeded(profile: .compatibility)
-			modelInstallationProgress = nil
-			modelInstallationMessage = "Compatibility model ready"
-			// Keep installing the quality model unless this device has now failed
-			// often enough to earn a durable downgrade.
-			stageHighAccuracyModelIfNeeded()
-		}
+		try await prepareModelIfNeeded()
 	}
 
-	private func makeWhisperKit(
-		profile: ScribeModelProfile,
-		honorsCancellation: Bool = true
-	) async throws -> WhisperKit {
+	private func makeWhisperKit() async throws -> WhisperKit {
 		try prepareModelCacheDirectory()
-		let readyFolder = cachedModelFolder(for: profile)
-		let downloadedFolder = downloadedModelFolder(for: profile)
-		let legacyFolder = legacyCompatibilityModelFolder(for: profile)
-		let existingFolder = readyFolder ?? downloadedFolder ?? legacyFolder
-		let isLegacyUnverifiedFolder = readyFolder == nil
-			&& downloadedFolder == nil
-			&& legacyFolder != nil
+		let existingFolder = cachedModelFolder() ?? downloadedModelFolder()
 		let folder: URL
 		if let existingFolder {
 			folder = existingFolder
 		} else {
-			folder = try await downloadModel(profile, honorsCancellation: honorsCancellation)
+			folder = try await downloadModel()
 		}
 
 		do {
-			let kit = try await loadWhisperKit(
-				profile: profile,
-				folder: folder,
-				honorsCancellation: honorsCancellation
-			)
+			let kit = try await loadWhisperKit(folder: folder)
 			do {
-				try markModelReady(profile: profile, folder: folder)
+				try markModelReady(folder: folder)
 			} catch {
 				await kit.unloadModels()
 				throw error
@@ -941,20 +849,13 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			return kit
 		} catch {
 			guard existingFolder != nil,
-			      isLegacyUnverifiedFolder || shouldRepairModelCache(for: error) else { throw error }
-			logger.warning("Cached \(profile.folderName, privacy: .public) model is incomplete; repairing it")
+			      shouldRepairModelCache(for: error) else { throw error }
+			logger.warning("Cached \(ScribeModelPolicy.folderName, privacy: .public) model is incomplete; repairing it")
 			invalidateModelMarkers(in: folder)
-			let repairedFolder = try await downloadModel(
-				profile,
-				honorsCancellation: honorsCancellation
-			)
-			let kit = try await loadWhisperKit(
-				profile: profile,
-				folder: repairedFolder,
-				honorsCancellation: honorsCancellation
-			)
+			let repairedFolder = try await downloadModel()
+			let kit = try await loadWhisperKit(folder: repairedFolder)
 			do {
-				try markModelReady(profile: profile, folder: repairedFolder)
+				try markModelReady(folder: repairedFolder)
 			} catch {
 				await kit.unloadModels()
 				throw error
@@ -963,31 +864,19 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		}
 	}
 
-	private func loadWhisperKit(
-		profile: ScribeModelProfile,
-		folder: URL,
-		honorsCancellation: Bool
-	) async throws -> WhisperKit {
-		if honorsCancellation { try Task.checkCancellation() }
-		let computeOptions: ModelComputeOptions? = profile.usesCPUOnly
-			? ModelComputeOptions(
-				melCompute: .cpuOnly,
-				audioEncoderCompute: .cpuOnly,
-				textDecoderCompute: .cpuOnly
-			)
-			: nil
+	private func loadWhisperKit(folder: URL) async throws -> WhisperKit {
+		try Task.checkCancellation()
 		let config = WhisperKitConfig(
 			downloadBase: modelDownloadBase,
 			modelFolder: folder.path,
 			tokenizerFolder: modelDownloadBase,
-			computeOptions: computeOptions,
 			verbose: false,
 			prewarm: false,
 			load: false,
 			download: false
 		)
 		let kit = try await WhisperKit(config)
-		if honorsCancellation, Task.isCancelled {
+		if Task.isCancelled {
 			await kit.unloadModels()
 			throw CancellationError()
 		}
@@ -1001,97 +890,71 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		// window in which the app could be killed mid-load.
 		updateModelPreparationStatus("Loading private on-device transcription…")
 		try await kit.loadModels()
-		if honorsCancellation, Task.isCancelled {
+		if Task.isCancelled {
 			await kit.unloadModels()
 			throw CancellationError()
 		}
 		return kit
 	}
 
-	private func downloadModel(
-		_ profile: ScribeModelProfile,
-		publishToCurrentRequest: Bool = true,
-		installationGeneration: UUID? = nil,
-		honorsCancellation: Bool = true
-	) async throws -> URL {
-		if honorsCancellation { try Task.checkCancellation() }
-		if profile == .highAccuracy { try verifyHighAccuracyStorage() }
+	private func downloadModel() async throws -> URL {
+		try Task.checkCancellation()
+		try verifyModelStorage()
 		let previousIdleTimerState = UIApplication.shared.isIdleTimerDisabled
-		if profile == .highAccuracy { UIApplication.shared.isIdleTimerDisabled = true }
-		defer {
-			if profile == .highAccuracy {
-				UIApplication.shared.isIdleTimerDisabled = previousIdleTimerState
-			}
-		}
+		UIApplication.shared.isIdleTimerDisabled = true
+		defer { UIApplication.shared.isIdleTimerDisabled = previousIdleTimerState }
 
-		let maximumAttempts = profile == .highAccuracy
-			? ScribeModelDownloadPolicy.maximumAttempts
-			: 1
 		var finalError: Error = DictationError.modelUnavailable
 
-		for attempt in 1...maximumAttempts {
-			if honorsCancellation { try Task.checkCancellation() }
-			try repairInvalidModelComponents(for: profile)
-			let attemptLabel = attempt == 1 ? "" : " — resuming \(attempt)/\(maximumAttempts)"
+		for attempt in 1...ScribeModelDownloadPolicy.maximumAttempts {
+			try Task.checkCancellation()
+			try repairInvalidModelComponents()
+			let attemptLabel = attempt == 1
+				? ""
+				: " — resuming \(attempt)/\(ScribeModelDownloadPolicy.maximumAttempts)"
 			updateModelPreparationStatus(
-				profile == .highAccuracy
-					? "Installing High Accuracy model\(attemptLabel)…"
-					: "Installing the on-device fallback…",
-				progress: 0,
-				publishToCurrentRequest: publishToCurrentRequest
+				"Installing the transcription model\(attemptLabel)…",
+				progress: 0
 			)
 
 			do {
 				let returnedFolder = try await WhisperKit.download(
-					variant: profile.downloadVariant,
+					variant: ScribeModelPolicy.downloadVariant,
 					downloadBase: modelDownloadBase,
 					from: ScribeModelPolicy.repository
 				) { [weak self] progress in
 					let fraction = progress.fractionCompleted
 					Task { @MainActor [weak self] in
-						guard let self else { return }
-						if let installationGeneration,
-						   self.qualityInstallGeneration != installationGeneration {
-							return
-						}
 						let percent = Int((fraction * 100).rounded())
-						self.updateModelPreparationStatus(
-							profile == .highAccuracy
-								? "Installing High Accuracy model… \(percent)%"
-								: "Installing the on-device fallback… \(percent)%",
-							progress: fraction,
-							publishToCurrentRequest: publishToCurrentRequest
+						self?.updateModelPreparationStatus(
+							"Installing the transcription model… \(percent)%",
+							progress: fraction
 						)
 					}
 				}
-				if honorsCancellation { try Task.checkCancellation() }
-				if let installationGeneration,
-				   qualityInstallGeneration != installationGeneration {
-					throw CancellationError()
-				}
-				let folder = modelFolder(for: profile)
+				try Task.checkCancellation()
+				let folder = modelFolder()
 				if returnedFolder.standardizedFileURL != folder.standardizedFileURL {
 					logger.warning("WhisperKit returned an unexpected model cache path; validating the canonical cache instead")
 				}
-				let invalidComponents = invalidModelComponents(in: folder, profile: profile)
+				let invalidComponents = invalidModelComponents(in: folder)
 				guard invalidComponents.isEmpty else {
 					throw DictationError.incompleteModelDownload(invalidComponents)
 				}
-				try markModelDownloaded(profile: profile, folder: folder)
+				try markModelDownloaded(folder: folder)
 				return folder
 			} catch is CancellationError {
 				throw CancellationError()
 			} catch {
 				finalError = error
-				guard attempt < maximumAttempts,
+				guard attempt < ScribeModelDownloadPolicy.maximumAttempts,
 				      ScribeModelDownloadPolicy.isRetryable(error as NSError) else {
 					throw error
 				}
-				logger.warning("High Accuracy download attempt \(attempt) was interrupted; resuming the partial cache: \(error.localizedDescription, privacy: .public)")
+				logger.warning("Model download attempt \(attempt) was interrupted; resuming the partial cache: \(error.localizedDescription, privacy: .public)")
 				updateModelPreparationStatus(
-					"High Accuracy was interrupted — resuming partial download…",
-					progress: nil,
-					publishToCurrentRequest: publishToCurrentRequest
+					"The download was interrupted — resuming…",
+					progress: nil
 				)
 				try await Task.sleep(
 					for: .seconds(ScribeModelDownloadPolicy.retryDelay(afterFailedAttempt: attempt))
@@ -1101,7 +964,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		throw finalError
 	}
 
-	private func verifyHighAccuracyStorage() throws {
+	private func verifyModelStorage() throws {
 		guard let values = try? modelDownloadBase.resourceValues(forKeys: [
 			.volumeAvailableCapacityForImportantUsageKey,
 			.volumeAvailableCapacityKey,
@@ -1109,66 +972,73 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		let capacity = values.volumeAvailableCapacityForImportantUsage
 			?? values.volumeAvailableCapacity.map(Int64.init)
 		if let capacity,
-		   capacity < ScribeModelDownloadPolicy.minimumHighAccuracyCapacity {
+		   capacity < ScribeModelDownloadPolicy.minimumCapacity {
 			throw DictationError.insufficientModelStorage
 		}
 	}
 
-	private func cachedModelFolder(for profile: ScribeModelProfile) -> URL? {
-		let folder = modelFolder(for: profile)
-		return hasCompleteModelComponents(in: folder, profile: profile)
+	private func cachedModelFolder() -> URL? {
+		let folder = modelFolder()
+		return hasCompleteModelComponents(in: folder)
 			&& FileManager.default.fileExists(atPath: readyMarker(in: folder).path)
 			? folder
 			: nil
 	}
 
-	private func downloadedModelFolder(for profile: ScribeModelProfile) -> URL? {
-		let folder = modelFolder(for: profile)
-		return hasCompleteModelComponents(in: folder, profile: profile)
+	private func downloadedModelFolder() -> URL? {
+		let folder = modelFolder()
+		return hasCompleteModelComponents(in: folder)
 			&& FileManager.default.fileExists(atPath: downloadedMarker(in: folder).path)
 			? folder
 			: nil
 	}
 
-	private func localCompatibilityModelFolder() -> URL? {
-		cachedModelFolder(for: .compatibility)
-			?? downloadedModelFolder(for: .compatibility)
-			?? legacyCompatibilityModelFolder(for: .compatibility)
-	}
-
-	private func legacyCompatibilityModelFolder(for profile: ScribeModelProfile) -> URL? {
-		guard profile == .compatibility else { return nil }
-		let folder = modelFolder(for: profile)
-		return hasCompleteModelComponents(in: folder, profile: profile) ? folder : nil
-	}
-
-	private func modelFolder(for profile: ScribeModelProfile) -> URL {
+	private func modelFolder() -> URL {
 		let repositoryRoot = HubApiWrapper(downloadBase: modelDownloadBase).localRepoLocation(
 			HubApiWrapper.Repo(id: ScribeModelPolicy.repository)
 		)
-		return repositoryRoot.appendingPathComponent(profile.folderName, isDirectory: true)
+		return repositoryRoot.appendingPathComponent(
+			ScribeModelPolicy.folderName,
+			isDirectory: true
+		)
+	}
+
+	/// Frees the caches of retired model tiers (~800 MB on devices that carried
+	/// them). Best-effort and asynchronous; failure just leaves dead weight.
+	private func removeObsoleteModelCaches() {
+		let repositoryRoot = HubApiWrapper(downloadBase: modelDownloadBase).localRepoLocation(
+			HubApiWrapper.Repo(id: ScribeModelPolicy.repository)
+		)
+		Task.detached(priority: .utility) { [logger] in
+			for name in ScribeModelPolicy.obsoleteModelFolderNames {
+				let folder = repositoryRoot.appendingPathComponent(name, isDirectory: true)
+				guard FileManager.default.fileExists(atPath: folder.path) else { continue }
+				logger.notice("Removing obsolete model cache \(name, privacy: .public)")
+				try? FileManager.default.removeItem(at: folder)
+			}
+		}
 	}
 
 	private func downloadedMarker(in folder: URL) -> URL {
-		folder.appendingPathComponent(".scribe-download-complete-v2")
+		folder.appendingPathComponent(ScribeModelPolicy.downloadedMarkerName)
 	}
 
 	private func readyMarker(in folder: URL) -> URL {
-		folder.appendingPathComponent(".scribe-ready-v2")
+		folder.appendingPathComponent(ScribeModelPolicy.readyMarkerName)
 	}
 
-	private func markModelDownloaded(profile: ScribeModelProfile, folder: URL) throws {
-		guard folder.standardizedFileURL == modelFolder(for: profile).standardizedFileURL,
-		      hasCompleteModelComponents(in: folder, profile: profile) else {
+	private func markModelDownloaded(folder: URL) throws {
+		guard folder.standardizedFileURL == modelFolder().standardizedFileURL,
+		      hasCompleteModelComponents(in: folder) else {
 			throw DictationError.incompleteModelDownload(
-				invalidModelComponents(in: folder, profile: profile)
+				invalidModelComponents(in: folder)
 			)
 		}
 		try Data("downloaded\n".utf8).write(to: downloadedMarker(in: folder), options: .atomic)
 	}
 
-	private func markModelReady(profile: ScribeModelProfile, folder: URL) throws {
-		try markModelDownloaded(profile: profile, folder: folder)
+	private func markModelReady(folder: URL) throws {
+		try markModelDownloaded(folder: folder)
 		try Data("ready\n".utf8).write(to: readyMarker(in: folder), options: .atomic)
 	}
 
@@ -1177,18 +1047,12 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		try? FileManager.default.removeItem(at: readyMarker(in: folder))
 	}
 
-	private func hasCompleteModelComponents(
-		in folder: URL,
-		profile: ScribeModelProfile
-	) -> Bool {
-		invalidModelComponents(in: folder, profile: profile).isEmpty
+	private func hasCompleteModelComponents(in folder: URL) -> Bool {
+		invalidModelComponents(in: folder).isEmpty
 	}
 
-	private func invalidModelComponents(
-		in folder: URL,
-		profile: ScribeModelProfile
-	) -> [String] {
-		profile.componentRequirements.compactMap { requirement in
+	private func invalidModelComponents(in folder: URL) -> [String] {
+		ScribeModelPolicy.componentRequirements.compactMap { requirement in
 			let component = folder.appendingPathComponent(
 				"\(requirement.name).mlmodelc",
 				isDirectory: true
@@ -1214,9 +1078,9 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		return Int64(values?.fileSize ?? 0)
 	}
 
-	private func repairInvalidModelComponents(for profile: ScribeModelProfile) throws {
-		let folder = modelFolder(for: profile)
-		let invalidComponents = invalidModelComponents(in: folder, profile: profile)
+	private func repairInvalidModelComponents() throws {
+		let folder = modelFolder()
+		let invalidComponents = invalidModelComponents(in: folder)
 		guard !invalidComponents.isEmpty else { return }
 
 		invalidateModelMarkers(in: folder)
@@ -1242,51 +1106,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		try? cacheURL.setResourceValues(values)
 	}
 
-	private func stageHighAccuracyModelIfNeeded() {
-		guard qualityInstallTask == nil,
-		      durableModelProfile == .highAccuracy,
-		      downloadedModelFolder(for: .highAccuracy) == nil else { return }
-
-		let generation = UUID()
-		qualityInstallGeneration = generation
-		qualityInstallTask = Task { @MainActor [weak self] in
-			guard let self else { return }
-			defer {
-				if self.qualityInstallGeneration == generation {
-					self.qualityInstallTask = nil
-					self.qualityInstallGeneration = nil
-				}
-			}
-			do {
-				try self.prepareModelCacheDirectory()
-				_ = try await self.downloadModel(
-					.highAccuracy,
-					publishToCurrentRequest: false,
-					installationGeneration: generation
-				)
-				try Task.checkCancellation()
-				guard self.qualityInstallGeneration == generation else {
-					throw CancellationError()
-				}
-				self.modelInstallationProgress = nil
-				self.modelInstallationMessage = "High Accuracy model downloaded — activates on next dictation"
-			} catch is CancellationError {
-				return
-			} catch {
-				self.logger.warning("High Accuracy model installation paused: \(error.localizedDescription, privacy: .public)")
-				self.modelInstallationProgress = nil
-				if let dictationError = error as? DictationError {
-					self.modelInstallationMessage = dictationError.modelInstallationMessage
-				} else {
-					self.modelInstallationMessage = ScribeModelDownloadPolicy.installationFailureMessage(
-						for: error as NSError
-					)
-				}
-			}
-		}
-	}
-
-	private func transcribeWithRecovery(audioURL: URL) async throws -> [TranscriptionResult] {
+	private func transcribe(audioURL: URL) async throws -> [TranscriptionResult] {
 		// These match the Mac build's decoding behaviour. Timestamp tokens stay
 		// enabled: they anchor segmentation and feed the compression-ratio and
 		// no-speech fallbacks, and suppressing them on the Large-v3 family is a
@@ -1299,27 +1119,12 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			withoutTimestamps: false,
 			suppressBlank: true
 		)
-		do {
-			try await prepareModelWithRecovery()
-			guard let whisperKit else { throw DictationError.modelUnavailable }
-			return try await whisperKit.transcribe(
-				audioPath: audioURL.path,
-				decodeOptions: options
-			)
-		} catch {
-			guard modelProfile != .compatibility,
-			      shouldUseCompatibilityMode(for: error) else { throw error }
-			logger.warning("High Accuracy transcription failed; retrying the saved audio with Base: \(error.localizedDescription, privacy: .public)")
-			publishStatus(.transcribing, "Retrying with the reliable on-device fallback…")
-			recordHighAccuracyFailure()
-			await unloadCurrentModel()
-			try await prepareModelIfNeeded(profile: .compatibility)
-			guard let whisperKit else { throw DictationError.modelUnavailable }
-			return try await whisperKit.transcribe(
-				audioPath: audioURL.path,
-				decodeOptions: options
-			)
-		}
+		try await prepareModelWithRecovery()
+		guard let whisperKit else { throw DictationError.modelUnavailable }
+		return try await whisperKit.transcribe(
+			audioPath: audioURL.path,
+			decodeOptions: options
+		)
 	}
 
 	private func unloadCurrentModel() async {
@@ -1327,48 +1132,6 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			await whisperKit.unloadModels()
 		}
 		whisperKit = nil
-		modelProfile = nil
-	}
-
-	/// Records one High Accuracy failure. The fallback stays in memory until the
-	/// device has failed repeatedly; only then does it survive a relaunch, and
-	/// even then it lapses so the quality model gets re-tested.
-	private func recordHighAccuracyFailure() {
-		sessionOnlyCompatibilityFallback = true
-		let updated = ScribeModelFallbackPolicy.stateAfterFailure(
-			storedFallbackState,
-			osMajorVersion: osMajorVersion
-		)
-		let defaults = UserDefaults.standard
-		defaults.set(updated.signature, forKey: fallbackSignatureKey)
-		defaults.set(updated.consecutiveFailures, forKey: fallbackFailureCountKey)
-		defaults.set(updated.lastFailureAt, forKey: fallbackLastFailureKey)
-		logger.warning("High Accuracy failure \(updated.consecutiveFailures, privacy: .public) of \(ScribeModelFallbackPolicy.failuresBeforePersisting, privacy: .public) before the preference persists")
-	}
-
-	private func recordHighAccuracySuccess() {
-		sessionOnlyCompatibilityFallback = false
-		guard storedFallbackState != .empty else { return }
-		let defaults = UserDefaults.standard
-		defaults.removeObject(forKey: fallbackSignatureKey)
-		defaults.removeObject(forKey: fallbackFailureCountKey)
-		defaults.removeObject(forKey: fallbackLastFailureKey)
-	}
-
-	func retryHighAccuracyModel() {
-		recordHighAccuracySuccess()
-		modelInstallationMessage = "Resuming the High Accuracy download…"
-		let generation = UUID()
-		qualityRetryGeneration = generation
-		let installTask = qualityInstallTask
-		installTask?.cancel()
-		Task { @MainActor [weak self] in
-			await installTask?.value
-			guard let self,
-			      self.qualityRetryGeneration == generation else { return }
-			self.qualityRetryGeneration = nil
-			await self.prepareModel()
-		}
 	}
 
 	private func startPreparationHeartbeatIfNeeded() -> Bool {
@@ -1405,19 +1168,6 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		if publishToCurrentRequest, currentRequestID != nil {
 			publishStatus(isTranscribing ? .transcribing : .preparing, message)
 		}
-	}
-
-	private func shouldUseCompatibilityMode(for error: Error) -> Bool {
-		let nsError = error as NSError
-		let haystack = "\(nsError.domain) \(nsError.localizedDescription)".lowercased()
-		return haystack.contains("coreml")
-			|| haystack.contains("ml program")
-			|| haystack.contains("prediction")
-			|| haystack.contains("compute device")
-			|| haystack.contains("espresso")
-			|| haystack.contains("neural engine")
-			|| haystack.contains("out of memory")
-			|| haystack.contains("allocation failed")
 	}
 
 	private func shouldRepairModelCache(for error: Error) -> Bool {
@@ -1651,9 +1401,9 @@ private enum DictationError: LocalizedError {
         case .modelUnavailable:
             "The on-device transcription model isn’t ready."
         case .insufficientModelStorage:
-            "High Accuracy needs about 1.9 GB of free storage."
+            "Scribe needs about 1.9 GB of free storage for its transcription model."
 		case .incompleteModelDownload(let components):
-			"The High Accuracy download is incomplete: \(components.joined(separator: ", "))."
+			"The model download is incomplete: \(components.joined(separator: ", "))."
         case .noSpeechDetected:
             "Scribe didn’t hear any speech. Please try again."
 		case .transcriptionTimedOut:
@@ -1664,11 +1414,11 @@ private enum DictationError: LocalizedError {
 	var modelInstallationMessage: String {
 		switch self {
 		case .insufficientModelStorage:
-			"High Accuracy needs about 1.9 GB free. Free some storage, then try again."
+			"Scribe needs about 1.9 GB free for its transcription model. Free some storage, then try again."
 		case .incompleteModelDownload:
-			"High Accuracy found an incomplete cache. Tap Try High Accuracy again — Scribe will repair and resume it."
+			"The model cache is incomplete. Try again — Scribe will repair and resume it."
 		case .modelUnavailable, .recordingDidNotStart, .noSpeechDetected, .transcriptionTimedOut:
-			errorDescription ?? "High Accuracy couldn’t finish. Tap Try High Accuracy again."
+			errorDescription ?? "The model install couldn’t finish. Please try again."
 		}
 	}
 }

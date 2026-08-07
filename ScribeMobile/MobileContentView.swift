@@ -136,10 +136,8 @@ struct MobileContentView: View {
     private var modelCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: coordinator.isUsingCompatibilityModel
-                      ? "shield.lefthalf.filled"
-                      : "sparkles")
-                    .foregroundStyle(coordinator.isUsingCompatibilityModel ? .orange : .indigo)
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.indigo)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(coordinator.activeModelName)
                         .font(.headline)
@@ -155,16 +153,9 @@ struct MobileContentView: View {
             if let progress = coordinator.modelInstallationProgress {
                 ProgressView(value: progress)
                     .tint(.indigo)
-				Text(coordinator.hasLoadedModel
-				     ? "You can keep dictating with the installed model while this finishes."
-				     : "Keep Scribe open while the private on-device model installs.")
+                Text("Keep Scribe open while the private on-device model installs.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if coordinator.isUsingCompatibilityModel {
-                Button("Try High Accuracy again") {
-                    coordinator.retryHighAccuracyModel()
-                }
-                .buttonStyle(.bordered)
             }
 
             if coordinator.refinementReadiness == .ready {

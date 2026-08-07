@@ -2,175 +2,57 @@ import XCTest
 @testable import ScribeSharedCore
 
 final class TranscriptionModelPolicyTests: XCTestCase {
-    func testHighAccuracyIsTheDefault() {
-        XCTAssertEqual(ScribeModelPolicy.primary, .highAccuracy)
-        XCTAssertEqual(ScribeModelPolicy.primary.downloadVariant, "large-v3_947MB")
-        XCTAssertEqual(
-            ScribeModelPolicy.primary.folderName,
-            "openai_whisper-large-v3_947MB"
-        )
-        XCTAssertFalse(ScribeModelPolicy.primary.usesCPUOnly)
+    /// `large-v3-v20240930` is the *turbo* release: 4 decoder layers instead
+    /// of 32. Decoding is where transcription accuracy lives, so Scribe runs
+    /// the full decoder. There is exactly one model — the Base "compatibility"
+    /// fallback was removed after it kept silently replacing the real model
+    /// whenever a background load hiccuped.
+    func testTheOnlyModelIsFullDecoderLargeV3() {
+        XCTAssertEqual(ScribeModelPolicy.downloadVariant, "large-v3_947MB")
+        XCTAssertFalse(ScribeModelPolicy.folderName.contains("v20240930"))
+        XCTAssertFalse(ScribeModelPolicy.folderName.contains("turbo"))
+        XCTAssertTrue(ScribeModelPolicy.folderName.contains("large-v3"))
     }
 
-    /// `large-v3-v20240930` is the *turbo* release: 4 decoder layers instead of
-    /// 32. Decoding is where transcription accuracy lives, so High Accuracy has
-    /// to run the full decoder. Full-precision turbo was rejected separately —
-    /// at 1.62 GB it made an existing out-of-memory crash worse.
-    func testHighAccuracyUsesTheFullDecoderNotTurbo() {
-        XCTAssertFalse(ScribeModelPolicy.primary.folderName.contains("v20240930"))
-        XCTAssertFalse(ScribeModelPolicy.primary.folderName.contains("turbo"))
-        XCTAssertTrue(ScribeModelPolicy.primary.folderName.contains("large-v3"))
+    // MARK: - Cache survival contract
+    //
+    // The installed model lives in Documents, which iOS preserves across app
+    // updates. Whether an update *reuses* it comes down to these exact
+    // strings: change any of them and every device re-downloads ~945 MB.
+    // These tests exist to make that an explicit decision, not an accident.
+
+    func testCacheFolderNameIsStable() {
+        XCTAssertEqual(ScribeModelPolicy.folderName, "openai_whisper-large-v3_947MB")
     }
 
-    func testCompatibilityUsesBaseAndCPUOnly() {
-        XCTAssertEqual(ScribeModelPolicy.fallback, .compatibility)
-        XCTAssertEqual(ScribeModelPolicy.fallback.downloadVariant, "base")
-        XCTAssertEqual(ScribeModelPolicy.fallback.folderName, "openai_whisper-base")
-        XCTAssertTrue(ScribeModelPolicy.fallback.usesCPUOnly)
+    func testCacheMarkerNamesAreStable() {
+        XCTAssertEqual(ScribeModelPolicy.downloadedMarkerName, ".scribe-download-complete-v2")
+        XCTAssertEqual(ScribeModelPolicy.readyMarkerName, ".scribe-ready-v2")
     }
 
-    // MARK: - Fallback stickiness
-
-    private func state(
-        failures: Int,
-        osMajorVersion: Int = 26,
-        lastFailureAt: Date? = Date()
-    ) -> ScribeModelFallbackState {
-        ScribeModelFallbackState(
-            signature: ScribeModelPolicy.compatibilitySignature(
-                osMajorVersion: osMajorVersion
-            ),
-            consecutiveFailures: failures,
-            lastFailureAt: lastFailureAt
-        )
+    func testRepositoryIsStable() {
+        XCTAssertEqual(ScribeModelPolicy.repository, "argmaxinc/whisperkit-coreml")
     }
 
-    /// The core regression: one bad download or one memory spike used to
-    /// downgrade the device permanently.
-    func testSingleFailureDoesNotPersistADowngrade() {
-        for failures in 0..<ScribeModelFallbackPolicy.failuresBeforePersisting {
-            XCTAssertEqual(
-                ScribeModelFallbackPolicy.preferredProfile(
-                    fallbackState: state(failures: failures),
-                    osMajorVersion: 26
-                ),
-                .highAccuracy,
-                "\(failures) failures should not be enough to persist a downgrade"
-            )
-        }
-    }
-
-    func testRepeatedFailuresPersistTheDowngrade() {
-        XCTAssertEqual(
-            ScribeModelFallbackPolicy.preferredProfile(
-                fallbackState: state(
-                    failures: ScribeModelFallbackPolicy.failuresBeforePersisting
-                ),
-                osMajorVersion: 26
-            ),
-            .compatibility
-        )
-    }
-
-    /// Even a persisted downgrade has to lapse: devices recover from low
-    /// storage and OS bugs, so the quality model gets re-tested.
-    func testPersistedDowngradeLapsesAfterTheRetryInterval() {
-        let stale = Date().addingTimeInterval(
-            -ScribeModelFallbackPolicy.retryInterval - 60
-        )
-        XCTAssertEqual(
-            ScribeModelFallbackPolicy.preferredProfile(
-                fallbackState: state(failures: 9, lastFailureAt: stale),
-                osMajorVersion: 26
-            ),
-            .highAccuracy
-        )
-    }
-
-    func testDowngradeIsDiscardedOnPolicyOrOSChange() {
-        let saturated = state(failures: 9)
-        XCTAssertEqual(
-            ScribeModelFallbackPolicy.preferredProfile(
-                fallbackState: saturated,
-                osMajorVersion: 27
-            ),
-            .highAccuracy
-        )
-        XCTAssertEqual(
-            ScribeModelFallbackPolicy.preferredProfile(
-                fallbackState: ScribeModelFallbackState(
-                    signature: "legacy-boolean-or-old-policy",
-                    consecutiveFailures: 9,
-                    lastFailureAt: Date()
-                ),
-                osMajorVersion: 26
-            ),
-            .highAccuracy
-        )
-    }
-
-    func testFailuresAccumulateAndSuccessClearsThem() {
-        var current = ScribeModelFallbackState.empty
-        for expected in 1...ScribeModelFallbackPolicy.failuresBeforePersisting {
-            current = ScribeModelFallbackPolicy.stateAfterFailure(
-                current,
-                osMajorVersion: 26
-            )
-            XCTAssertEqual(current.consecutiveFailures, expected)
-        }
-        XCTAssertEqual(
-            ScribeModelFallbackPolicy.preferredProfile(
-                fallbackState: current,
-                osMajorVersion: 26
-            ),
-            .compatibility
-        )
-
-        XCTAssertEqual(ScribeModelFallbackPolicy.stateAfterSuccess(), .empty)
-        XCTAssertEqual(
-            ScribeModelFallbackPolicy.preferredProfile(
-                fallbackState: .empty,
-                osMajorVersion: 26
-            ),
-            .highAccuracy
-        )
-    }
-
-    /// A failure counted under a previous OS must not carry over.
-    func testFailureCountResetsWhenTheSignatureChanges() {
-        let old = ScribeModelFallbackState(
-            signature: ScribeModelPolicy.compatibilitySignature(osMajorVersion: 25),
-            consecutiveFailures: 7,
-            lastFailureAt: Date()
-        )
-        let updated = ScribeModelFallbackPolicy.stateAfterFailure(
-            old,
-            osMajorVersion: 26
-        )
-        XCTAssertEqual(updated.consecutiveFailures, 1)
-    }
-
-    // MARK: - Downloads
-
-    func testHighAccuracyDownloadsRetryButCancellationDoesNot() {
-        XCTAssertEqual(ScribeModelDownloadPolicy.maximumAttempts, 4)
-        XCTAssertTrue(
-            ScribeModelDownloadPolicy.isRetryable(
-                NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
-            )
-        )
+    /// The retired tiers may be deleted; the live folder must never appear in
+    /// the deletion list.
+    func testObsoleteFolderListNeverContainsTheLiveModel() {
         XCTAssertFalse(
-            ScribeModelDownloadPolicy.isRetryable(
-                NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
-            )
+            ScribeModelPolicy.obsoleteModelFolderNames.contains(ScribeModelPolicy.folderName)
+        )
+        XCTAssertTrue(
+            ScribeModelPolicy.obsoleteModelFolderNames.contains("openai_whisper-base"),
+            "the compatibility tier's cache should be reclaimed"
         )
     }
+
+    // MARK: - Component validation
 
     /// Weights are floor-checked, not equality-checked. An upstream re-publish
     /// that shifts a file by a few bytes must not brand a good cache invalid
-    /// and strand the device on Base forever.
-    func testHighAccuracyValidatesWeightsAgainstALowerBound() {
-        let requirements = ScribeModelPolicy.primary.componentRequirements
+    /// and force a re-download.
+    func testComponentWeightsAreValidatedAgainstLowerBounds() {
+        let requirements = ScribeModelPolicy.componentRequirements
         XCTAssertEqual(requirements.map(\.name), [
             "MelSpectrogram", "AudioEncoder", "TextDecoder",
         ])
@@ -187,26 +69,33 @@ final class TranscriptionModelPolicyTests: XCTestCase {
         XCTAssertNotNil(decoder?.minimumWeightBytes)
         XCTAssertLessThan(decoder!.minimumWeightBytes!, 590_719_924)
         XCTAssertGreaterThan(decoder!.minimumWeightBytes!, 400_000_000)
+    }
 
+    // MARK: - Downloads
+
+    func testDownloadsRetryButCancellationDoesNot() {
+        XCTAssertEqual(ScribeModelDownloadPolicy.maximumAttempts, 4)
         XCTAssertTrue(
-            ScribeModelPolicy.fallback.componentRequirements.allSatisfy {
-                $0.minimumWeightBytes == nil
-            }
+            ScribeModelDownloadPolicy.isRetryable(
+                NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+            )
+        )
+        XCTAssertFalse(
+            ScribeModelDownloadPolicy.isRetryable(
+                NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+            )
         )
     }
 
     func testStorageRequirementCoversTheDownloadWithHeadroom() {
-        XCTAssertGreaterThan(
-            ScribeModelDownloadPolicy.minimumHighAccuracyCapacity,
-            945_001_716
-        )
+        XCTAssertGreaterThan(ScribeModelDownloadPolicy.minimumCapacity, 945_001_716)
     }
 
     func testDownloadFailureMessagesExplainRecovery() {
         let networkMessage = ScribeModelDownloadPolicy.installationFailureMessage(
             for: NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)
         )
-        XCTAssertTrue(networkMessage.contains("download will resume"))
+        XCTAssertTrue(networkMessage.contains("resume"))
 
         let storageMessage = ScribeModelDownloadPolicy.installationFailureMessage(
             for: NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError)
