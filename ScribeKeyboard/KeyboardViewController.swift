@@ -7,6 +7,14 @@ final class KeyboardDocumentState: ObservableObject {
     @Published private(set) var selectionRevision = 0
     @Published private(set) var hasFullAccess = false
     @Published private(set) var needsInputModeSwitchKey = false
+    @Published private(set) var preferences: KeyboardPreferences
+    private let preferencesStore: SharedKeyboardPreferencesStore
+
+    init() {
+        let store = SharedKeyboardPreferencesStore()
+        preferencesStore = store
+        preferences = store.preferences
+    }
 
     func textChanged() { textRevision &+= 1 }
     func selectionChanged() { selectionRevision &+= 1 }
@@ -17,6 +25,10 @@ final class KeyboardDocumentState: ObservableObject {
         }
         if self.needsInputModeSwitchKey != needsInputModeSwitchKey {
             self.needsInputModeSwitchKey = needsInputModeSwitchKey
+        }
+        let latestPreferences = preferencesStore.preferences
+        if preferences != latestPreferences {
+            preferences = latestPreferences
         }
     }
 }
@@ -33,6 +45,7 @@ final class KeyboardViewController: UIInputViewController {
         // UIKit's current feedback API must be associated with the live input
         // view. Installing it here also primes the engine before SwiftUI begins
         // handling key touches.
+        KeyboardHaptics.setEnabled(documentState.preferences.hapticsEnabled)
         KeyboardHaptics.attach(to: view)
 
         let rootView = KeyboardRootView(
@@ -162,8 +175,8 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        KeyboardHaptics.prepareForInput()
         updateHostEnvironment()
+        KeyboardHaptics.prepareForInput()
         updateKeyboardHeight()
     }
 
@@ -209,6 +222,7 @@ final class KeyboardViewController: UIInputViewController {
             hasFullAccess: hasFullAccess,
             needsInputModeSwitchKey: needsInputModeSwitchKey
         )
+        KeyboardHaptics.setEnabled(documentState.preferences.hapticsEnabled)
     }
 
     private func updateKeyboardHeight() {

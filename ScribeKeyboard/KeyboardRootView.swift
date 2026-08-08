@@ -349,7 +349,9 @@ struct KeyboardRootView: View {
 
     @ViewBuilder
     private var keyPreview: some View {
-        if let previewedKey, let frame = keyFrames[previewedKey] {
+        if documentState.preferences.keyPreviewsEnabled,
+           let previewedKey,
+           let frame = keyFrames[previewedKey] {
             let width = frame.width * 1.42
             let height = keyHeight * 1.34
             let minX = keyAreaBounds.minX
@@ -535,6 +537,7 @@ struct KeyboardRootView: View {
     }
 
     private func alternateSymbol(for character: Character) -> Character? {
+        guard documentState.preferences.alternateSymbolsEnabled else { return nil }
         if character.isNumber {
             return KeyboardAlternateSymbols.alternate(for: character)
         }
@@ -900,8 +903,10 @@ struct KeyboardRootView: View {
 
     private func scheduleAlternateHold(for key: KeyID, alternate: Character) {
         alternateHoldTask?.cancel()
+        guard documentState.preferences.alternateSymbolsEnabled else { return }
+        let delay = documentState.preferences.alternateHoldDelayMilliseconds
         alternateHoldTask = Task { @MainActor in
-            try? await Task.sleep(for: KeyboardGestureResolver.alternateHoldDelay)
+            try? await Task.sleep(for: .milliseconds(delay))
             guard !Task.isCancelled,
                   touchMode == .pressed,
                   startKey == key else { return }
@@ -944,6 +949,7 @@ struct KeyboardRootView: View {
             if layout == .letters, character.isLetter, shiftState == .once {
                 shiftState = .off
             }
+            applySymbolPageTapBehavior()
         case .shift:
             let now = Date()
             if let lastShiftTapAt,
@@ -969,7 +975,17 @@ struct KeyboardRootView: View {
            shiftState == .once {
             shiftState = .off
         }
+        applySymbolPageTapBehavior()
         KeyboardHaptics.swipeCommit()
+    }
+
+    private func applySymbolPageTapBehavior() {
+        guard layout != .letters,
+              documentState.preferences.symbolPageTapBehavior == .returnToLetters else {
+            return
+        }
+        layout = .letters
+        refreshAutomaticShift()
     }
 
     private func appendSwipePoint(_ point: CGPoint) {
@@ -1173,7 +1189,8 @@ struct KeyboardRootView: View {
         let elapsed = lastSpaceTapAt.map { now.timeIntervalSince($0) }
         let before = context().0
 
-        if KeyboardEditingRules.shouldConvertDoubleSpace(
+        if documentState.preferences.doubleSpacePeriodEnabled,
+           KeyboardEditingRules.shouldConvertDoubleSpace(
             contextBefore: before,
             elapsedSincePreviousSpace: elapsed,
             fieldKind: fieldKind()

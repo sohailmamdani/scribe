@@ -13,13 +13,25 @@ enum KeyboardHaptics {
     private static var wordCommit: UIImpactFeedbackGenerator?
     private static var notice: UINotificationFeedbackGenerator?
     private static var keepWarmTimer: Timer?
+    private static var isEnabled = true
+
+    static func setEnabled(_ enabled: Bool) {
+        guard isEnabled != enabled else { return }
+        isEnabled = enabled
+        if enabled {
+            prepareForInput()
+        } else {
+            keepWarmTimer?.invalidate()
+            keepWarmTimer = nil
+        }
+    }
 
     static func attach(to view: UIView) {
         keyTap = UIImpactFeedbackGenerator(style: .light, view: view)
         deleteRepeat = UIImpactFeedbackGenerator(style: .soft, view: view)
         wordCommit = UIImpactFeedbackGenerator(style: .medium, view: view)
         notice = UINotificationFeedbackGenerator(view: view)
-        prepareForInput()
+        if isEnabled { prepareForInput() }
     }
 
     /// Prime the generators while the keyboard is becoming visible, and keep
@@ -33,6 +45,7 @@ enum KeyboardHaptics {
     /// exactly the bounded period Apple's docs describe for holding an engine
     /// prepared. `detach` stops it the moment the keyboard leaves the screen.
     static func prepareForInput() {
+        guard isEnabled else { return }
         prepareAll()
         keepWarmTimer?.invalidate()
         let timer = Timer(timeInterval: 1.5, repeats: true) { _ in
@@ -55,31 +68,37 @@ enum KeyboardHaptics {
     }
 
     static func keyDown() {
+        guard isEnabled else { return }
         keyTap?.impactOccurred(intensity: 0.8)
         rearm(keyTap)
     }
 
     static func deleteTick() {
+        guard isEnabled else { return }
         deleteRepeat?.impactOccurred(intensity: 0.6)
         rearm(deleteRepeat)
     }
 
     static func cursorTick() {
+        guard isEnabled else { return }
         deleteRepeat?.impactOccurred(intensity: 0.35)
         rearm(deleteRepeat)
     }
 
     static func cursorModeBegan() {
+        guard isEnabled else { return }
         wordCommit?.impactOccurred(intensity: 0.8)
         rearm(wordCommit)
     }
 
     static func swipeCommit() {
+        guard isEnabled else { return }
         wordCommit?.impactOccurred()
         rearm(wordCommit)
     }
 
     static func swipeFailed() {
+        guard isEnabled else { return }
         notice?.notificationOccurred(.warning)
         rearm(notice)
     }

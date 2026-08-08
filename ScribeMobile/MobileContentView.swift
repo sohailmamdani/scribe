@@ -21,6 +21,16 @@ struct MobileContentView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Scribe")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        KeyboardSettingsView()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Keyboard Settings")
+                }
+            }
         }
     }
 
