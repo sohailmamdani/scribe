@@ -1,17 +1,61 @@
 import Foundation
 
-/// The one transcription model Scribe uses on iOS.
-///
-/// There is deliberately no fallback tier. Earlier builds shipped a Whisper
-/// Base "compatibility" model and switched to it whenever the main model
-/// failed to prepare — which in practice meant background load hiccups
-/// silently downgraded dictation quality, and users could not tell why
-/// results were suddenly poor. A failed preparation is now an honest, visible
-/// failure with a retry, never a quiet downgrade.
+enum ScribeModelProfile: String, Equatable, Sendable {
+    case highAccuracy
+    case backgroundFallback
+
+    var downloadVariant: String {
+        switch self {
+        case .highAccuracy: "large-v3_947MB"
+        case .backgroundFallback: "base"
+        }
+    }
+
+    var folderName: String {
+        switch self {
+        case .highAccuracy: "openai_whisper-large-v3_947MB"
+        case .backgroundFallback: "openai_whisper-base"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .highAccuracy: "Whisper Large-v3"
+        case .backgroundFallback: "Whisper Base background recovery"
+        }
+    }
+
+    var usesCPUOnly: Bool { self == .backgroundFallback }
+
+    var componentRequirements: [ScribeModelComponentRequirement] {
+        switch self {
+        case .backgroundFallback:
+            [
+                .init(name: "MelSpectrogram"),
+                .init(name: "AudioEncoder"),
+                .init(name: "TextDecoder"),
+            ]
+        case .highAccuracy:
+            [
+                .init(name: "MelSpectrogram", minimumWeightBytes: 300_000),
+                .init(name: "AudioEncoder", minimumWeightBytes: 330_000_000),
+                .init(name: "TextDecoder", minimumWeightBytes: 550_000_000),
+            ]
+        }
+    }
+}
+
+/// Large-v3 remains Scribe's normal model. Whisper Base is installed only as a
+/// CPU-only recovery engine for iOS background execution, where Core ML can
+/// revoke the compute resources used by Large-v3. Using the fallback never
+/// writes a lasting model preference; foregrounding Scribe selects Large-v3
+/// again.
 enum ScribeModelPolicy {
     static let repository = "argmaxinc/whisperkit-coreml"
-    static let downloadVariant = "large-v3_947MB"
-    static let displayName = "Whisper Large-v3"
+    static let primary: ScribeModelProfile = .highAccuracy
+    static let backgroundFallback: ScribeModelProfile = .backgroundFallback
+    static let downloadVariant = primary.downloadVariant
+    static let displayName = primary.displayName
 
     /// The on-disk cache contract. These three values decide whether an
     /// installed model survives an app update:
@@ -24,7 +68,7 @@ enum ScribeModelPolicy {
     /// Changing any of them orphans every installed cache and forces users
     /// through the ~945 MB download again. Do not rename them for cosmetic
     /// reasons; there are tests pinning each one.
-    static let folderName = "openai_whisper-large-v3_947MB"
+    static let folderName = primary.folderName
     static let downloadedMarkerName = ".scribe-download-complete-v2"
     static let readyMarkerName = ".scribe-ready-v2"
 
@@ -34,19 +78,25 @@ enum ScribeModelPolicy {
     /// a file by a few bytes must not brand a good cache invalid.
     ///
     /// Actual sizes: 373 KB / 354 MB / 591 MB.
-    static let componentRequirements: [ScribeModelComponentRequirement] = [
-        .init(name: "MelSpectrogram", minimumWeightBytes: 300_000),
-        .init(name: "AudioEncoder", minimumWeightBytes: 330_000_000),
-        .init(name: "TextDecoder", minimumWeightBytes: 550_000_000),
-    ]
+    static let componentRequirements = primary.componentRequirements
 
-    /// Leftover caches from the retired compatibility tier and the earlier
-    /// quantized-turbo build. Safe to delete on sight; reclaims ~800 MB on
-    /// devices that carried them.
+    /// Leftover cache from the earlier quantized-turbo build. The Base folder
+    /// is live again and must never be reclaimed here.
     static let obsoleteModelFolderNames = [
-        "openai_whisper-base",
         "openai_whisper-large-v3-v20240930_626MB",
     ]
+}
+
+enum BackgroundTranscriptionRecoveryPolicy {
+    /// A foreground failure remains visible and retryable with Large-v3. A
+    /// background failure gets one CPU-only recovery because iOS commonly
+    /// revokes the accelerator resources that the full model requires.
+    static func shouldRetryWithFallback(
+        attemptBeganInBackground: Bool,
+        attemptedProfile: ScribeModelProfile
+    ) -> Bool {
+        attemptBeganInBackground && attemptedProfile == .highAccuracy
+    }
 }
 
 struct ScribeModelComponentRequirement: Equatable, Sendable {

@@ -4,14 +4,16 @@ import XCTest
 final class TranscriptionModelPolicyTests: XCTestCase {
     /// `large-v3-v20240930` is the *turbo* release: 4 decoder layers instead
     /// of 32. Decoding is where transcription accuracy lives, so Scribe runs
-    /// the full decoder. There is exactly one model — the Base "compatibility"
-    /// fallback was removed after it kept silently replacing the real model
-    /// whenever a background load hiccuped.
-    func testTheOnlyModelIsFullDecoderLargeV3() {
+    /// the full decoder. Base is a CPU-only background recovery path, never the
+    /// normal foreground model.
+    func testPrimaryModelIsFullDecoderLargeV3() {
         XCTAssertEqual(ScribeModelPolicy.downloadVariant, "large-v3_947MB")
         XCTAssertFalse(ScribeModelPolicy.folderName.contains("v20240930"))
         XCTAssertFalse(ScribeModelPolicy.folderName.contains("turbo"))
         XCTAssertTrue(ScribeModelPolicy.folderName.contains("large-v3"))
+        XCTAssertEqual(ScribeModelPolicy.primary, .highAccuracy)
+        XCTAssertEqual(ScribeModelPolicy.backgroundFallback, .backgroundFallback)
+        XCTAssertTrue(ScribeModelPolicy.backgroundFallback.usesCPUOnly)
     }
 
     // MARK: - Cache survival contract
@@ -34,15 +36,39 @@ final class TranscriptionModelPolicyTests: XCTestCase {
         XCTAssertEqual(ScribeModelPolicy.repository, "argmaxinc/whisperkit-coreml")
     }
 
-    /// The retired tiers may be deleted; the live folder must never appear in
+    /// Retired tiers may be deleted; neither live folder may ever appear in
     /// the deletion list.
     func testObsoleteFolderListNeverContainsTheLiveModel() {
         XCTAssertFalse(
             ScribeModelPolicy.obsoleteModelFolderNames.contains(ScribeModelPolicy.folderName)
         )
+        XCTAssertFalse(
+            ScribeModelPolicy.obsoleteModelFolderNames.contains(
+                ScribeModelPolicy.backgroundFallback.folderName
+            ),
+            "background recovery must survive app launches and updates"
+        )
+    }
+
+    func testBackgroundRecoveryIsScopedToLargeV3BackgroundFailures() {
         XCTAssertTrue(
-            ScribeModelPolicy.obsoleteModelFolderNames.contains("openai_whisper-base"),
-            "the compatibility tier's cache should be reclaimed"
+            BackgroundTranscriptionRecoveryPolicy.shouldRetryWithFallback(
+                attemptBeganInBackground: true,
+                attemptedProfile: .highAccuracy
+            )
+        )
+        XCTAssertFalse(
+            BackgroundTranscriptionRecoveryPolicy.shouldRetryWithFallback(
+                attemptBeganInBackground: false,
+                attemptedProfile: .highAccuracy
+            )
+        )
+        XCTAssertFalse(
+            BackgroundTranscriptionRecoveryPolicy.shouldRetryWithFallback(
+                attemptBeganInBackground: true,
+                attemptedProfile: .backgroundFallback
+            ),
+            "a failed fallback must not recurse"
         )
     }
 

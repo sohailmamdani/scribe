@@ -21,7 +21,14 @@ struct ScribeMobileApp: App {
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     guard newPhase == .active else { return }
-                    Task { _ = await coordinator.handlePendingKeyboardRequest() }
+                    Task {
+                        let handledKeyboardRequest = await coordinator.handlePendingKeyboardRequest()
+                        if !handledKeyboardRequest {
+                            // A CPU fallback is scoped to the live background
+                            // session. Returning to Scribe restores Large-v3.
+                            await coordinator.prepareModel()
+                        }
+                    }
                 }
         }
     }
