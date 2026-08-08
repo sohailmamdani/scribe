@@ -5,8 +5,81 @@ import Foundation
 import OSLog
 import UIKit
 
+/// The flow engine owns the microphone for the entire background session.
+/// Arming this sink turns its existing input tap from a discard-only keepalive
+/// into a recorder without stopping or reacquiring the audio route.
+private final class FlowAudioCaptureSink: @unchecked Sendable {
+	private let lock = NSLock()
+	private var file: AVAudioFile?
+	private var writeError: NSError?
+	private var normalizedLevel: Double = 0
+
+	var isCapturing: Bool {
+		lock.withLock { file != nil }
+	}
+
+	var audioLevel: Double {
+		lock.withLock { normalizedLevel }
+	}
+
+	func start(url: URL, format: AVAudioFormat) throws {
+		let newFile = try AVAudioFile(forWriting: url, settings: format.settings)
+		lock.withLock {
+			file = newFile
+			writeError = nil
+			normalizedLevel = 0
+		}
+	}
+
+	func consume(_ buffer: AVAudioPCMBuffer) {
+		lock.withLock {
+			guard let file else { return }
+			do {
+				try file.write(from: buffer)
+				normalizedLevel = Self.level(for: buffer)
+			} catch {
+				writeError = error as NSError
+				self.file = nil
+				normalizedLevel = 0
+			}
+		}
+	}
+
+	@discardableResult
+	func stop() -> NSError? {
+		lock.withLock {
+			file = nil
+			normalizedLevel = 0
+			let error = writeError
+			writeError = nil
+			return error
+		}
+	}
+
+	func takeWriteError() -> NSError? {
+		lock.withLock {
+			let error = writeError
+			writeError = nil
+			return error
+		}
+	}
+
+	private static func level(for buffer: AVAudioPCMBuffer) -> Double {
+		guard let samples = buffer.floatChannelData?.pointee,
+		      buffer.frameLength > 0 else { return 0 }
+		var sum: Float = 0
+		for index in 0..<Int(buffer.frameLength) {
+			let sample = samples[index]
+			sum += sample * sample
+		}
+		let rms = sqrt(Double(sum) / Double(buffer.frameLength))
+		let decibels = 20 * log10(max(rms, 0.000_001))
+		return max(0, min(1, (decibels + 55) / 55))
+	}
+}
+
 @MainActor
-final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AVAudioRecorderDelegate {
+final class DictationCoordinator: NSObject, ObservableObject {
 	struct HistoryItem: Codable, Identifiable {
 		let id: UUID
 		let text: String
@@ -52,7 +125,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	}
     private var whisperKit: WhisperKit?
     private var modelProfile: ScribeModelProfile?
-    private var audioRecorder: AVAudioRecorder?
+	private let captureSink = FlowAudioCaptureSink()
     private var recordingURL: URL?
 	private var pendingRecordingURL: URL?
 	private var pendingRecordingRequestID: String?
@@ -161,7 +234,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		guard whisperKit != nil,
 		      !isPreparingModel,
 		      !isTranscribing,
-		      audioRecorder == nil else { return }
+		      recordingURL == nil else { return }
 		logger.warning("Releasing the transcription model after a memory warning")
 		// A live session promises the keyboard that the app can accept a request
 		// without being brought to the foreground. Once the model is released
@@ -193,7 +266,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
     }
 
     func prepareModel() async {
-		guard audioRecorder == nil, !isStartingRecording, !isTranscribing else { return }
+		guard recordingURL == nil, !isStartingRecording, !isTranscribing else { return }
         state = .preparing
         do {
             try await prepareModelIfNeeded(profile: .highAccuracy)
@@ -247,7 +320,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
             publishStatus(.preparing, "Starting Scribe…", for: request.id)
             await startRecording(requestID: request.id)
 		case .stop:
-			guard audioRecorder != nil, recordingURL != nil else {
+			guard captureSink.isCapturing, recordingURL != nil else {
 				publishFailure("There isn’t an active recording to finish.", for: request.id)
 				currentRequestID = nil
 				if whisperKit == nil { await prepareModel() }
@@ -315,9 +388,8 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
             return false
         }
 
-        // The primary recorder starts immediately after this returns. Publish
-        // the shared live session only once that recorder is verifiably active;
-        // starting a throwaway recorder here adds latency and audio-route churn.
+		// The flow engine starts immediately after this returns. Publish the
+		// shared live session only once that engine is verifiably active.
         return true
     }
 
@@ -329,7 +401,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
         isSessionActive = false
         sessionExpiresAt = nil
         sharedStore.endSession(processID: processID)
-        if audioRecorder == nil, !isTranscribing {
+		if recordingURL == nil, !isTranscribing {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
@@ -347,9 +419,8 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))
                 guard let self, self.isSessionActive else { return }
-				guard self.audioRecorder?.isRecording == true
-				        || self.keepAliveEngine?.isRunning == true else {
-					self.handleFlowSessionRecorderStopped()
+				guard self.keepAliveEngine?.isRunning == true else {
+					self.handleFlowSessionEngineStopped()
 					return
 				}
 
@@ -358,7 +429,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 					self.sharedStore.refreshSessionHeartbeat(processID: self.processID)
 				}
                 if let expiry = self.sessionExpiresAt, Date() > expiry,
-                   self.audioRecorder == nil, !self.isTranscribing {
+				   self.recordingURL == nil, !self.isTranscribing {
                     self.endFlowSession()
                     return
                 }
@@ -371,7 +442,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
     }
 
 	private func startKeepAliveEngineIfIdle() throws {
-		guard audioRecorder == nil, keepAliveEngine == nil else { return }
+		guard keepAliveEngine == nil else { return }
 		let engine = AVAudioEngine()
 		let input = engine.inputNode
 		let format = input.outputFormat(forBus: 0)
@@ -380,8 +451,10 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		}
 		// iOS only keeps the containing app responsive to keyboard commands
 		// while an audio route is active in the background. Consume and discard
-		// these interim buffers in memory; only explicit dictations use a recorder.
-		input.installTap(onBus: 0, bufferSize: 4_096, format: format) { _, _ in }
+		// these interim buffers in memory until an explicit dictation arms the sink.
+		input.installTap(onBus: 0, bufferSize: 4_096, format: format) { [captureSink] buffer, _ in
+			captureSink.consume(buffer)
+		}
 		engine.prepare()
 		do {
 			try engine.start()
@@ -399,13 +472,12 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	@discardableResult
 	private func restoreKeepAliveOrEndSession() -> Bool {
 		guard isSessionActive else { return false }
-		if audioRecorder?.isRecording == true || keepAliveEngine?.isRunning == true {
+		if keepAliveEngine?.isRunning == true {
 			return true
 		}
 
-		// A stopped primary recorder means the active recording was lost; do not
-		// disguise that as a healthy background session.
-		guard audioRecorder == nil else {
+		// Losing the one engine during an armed capture loses the microphone.
+		guard recordingURL == nil else {
 			endFlowSession()
 			return false
 		}
@@ -448,10 +520,9 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
     }
 
     private func handleAudioInterruption() {
-        if audioRecorder != nil {
-            audioRecorder?.stop()
-            audioRecorder = nil
-            recordingURL = nil
+		if recordingURL != nil {
+			_ = captureSink.stop()
+			recordingURL = nil
             meterTask?.cancel()
             meterTask = nil
             audioLevel = 0
@@ -466,12 +537,12 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
     // MARK: - Dictation
 
     func startRecording(requestID: String? = nil) async {
-		if let audioRecorder, !audioRecorder.isRecording {
-			handleUnexpectedRecorderFailure()
+		if recordingURL != nil, !captureSink.isCapturing {
+			handleUnexpectedCaptureFailure()
 			return
 		}
-        guard !isStartingRecording, !isTranscribing, audioRecorder == nil else {
-            if audioRecorder != nil {
+		guard !isStartingRecording, !isTranscribing, recordingURL == nil else {
+			if recordingURL != nil {
                 publishStatus(.recording, "Listening…", for: requestID ?? currentRequestID)
 			} else if let requestID = requestID ?? currentRequestID {
 				publishBusyFailure(for: requestID)
@@ -487,7 +558,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 				recordingStartGeneration = nil
 			}
 			isStartingRecording = false
-			if wasInvalidated, state == .preparing, audioRecorder == nil, !isTranscribing {
+			if wasInvalidated, state == .preparing, recordingURL == nil, !isTranscribing {
 				if whisperKit != nil {
 					state = .ready
 				} else {
@@ -515,7 +586,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 		let audioSessionReady = await prepareAudioSessionForRecording()
 		guard isCurrentRecordingStart(startGeneration, requestID: requestID) else {
-			if audioSessionReady, !isSessionActive, audioRecorder == nil {
+			if audioSessionReady, !isSessionActive, recordingURL == nil {
 				try? AVAudioSession.sharedInstance().setActive(
 					false,
 					options: .notifyOthersOnDeactivation
@@ -524,36 +595,21 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			return
 		}
 		guard audioSessionReady else { return }
-		stopKeepAliveEngine()
 
         do {
             let url = try makePendingRecordingURL()
-            // Uncompressed 16 kHz mono PCM, matching the Mac recorder. The old
-            // AAC encode threw away spectral detail before Whisper ever saw the
-            // audio; at these durations the file-size saving is irrelevant and
-            // the codec artefacts are not.
-            let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVSampleRateKey: 16_000,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsNonInterleaved: false,
-            ]
-
-            let recorder = try AVAudioRecorder(url: url, settings: settings)
-            recorder.delegate = self
-            recorder.isMeteringEnabled = true
-            guard recorder.prepareToRecord(), recorder.record(), recorder.isRecording else {
-                throw DictationError.recordingDidNotStart
-            }
+			try startKeepAliveEngineIfIdle()
+			guard let engine = keepAliveEngine, engine.isRunning else {
+				throw DictationError.recordingDidNotStart
+			}
+			let format = engine.inputNode.outputFormat(forBus: 0)
+			try captureSink.start(url: url, format: format)
+			guard captureSink.isCapturing else { throw DictationError.recordingDidNotStart }
 
             recordingURL = url
 			pendingRecordingURL = url
 			UserDefaults.standard.set(url.path, forKey: pendingRecordingPathKey)
 			rememberPendingRecordingRequest(currentRequestID)
-            audioRecorder = recorder
 			if !isSessionActive {
 				isSessionActive = true
 				observeInterruptions()
@@ -589,17 +645,21 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	}
 
     func stopAndTranscribe() async {
-        guard !isTranscribing, let recorder = audioRecorder, let url = recordingURL else { return }
+		guard !isTranscribing, captureSink.isCapturing, let url = recordingURL else { return }
 
-        audioRecorder = nil
-        recordingURL = nil
-        recorder.stop()
-        meterTask?.cancel()
+		let captureError = captureSink.stop()
+		recordingURL = nil
+		meterTask?.cancel()
         meterTask = nil
         audioLevel = 0
         sharedStore.audioLevel = 0
-        state = .transcribing
+		state = .transcribing
 		publishStatus(.transcribing, "Polishing your words…")
+		if let captureError {
+			logger.error("Audio capture failed before transcription: \(captureError.localizedDescription, privacy: .public)")
+			handleUnexpectedCaptureFailure()
+			return
+		}
 		if isSessionActive, !restoreKeepAliveOrEndSession() {
 			// The keep-alive engine exists only to receive the *next* keyboard
 			// command. Losing it must not abort transcription of audio that is
@@ -753,11 +813,9 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
     func cancelRecording() {
 		recordingStartGeneration = nil
-        let recorder = audioRecorder
-        audioRecorder = nil
-        recordingURL = nil
+		_ = captureSink.stop()
+		recordingURL = nil
 		transcriptionGeneration = nil
-		recorder?.stop()
 		discardPendingRecording()
         meterTask?.cancel()
         meterTask = nil
@@ -778,9 +836,13 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
     }
 
     private func updateMeter() {
-        guard let recorder = audioRecorder else { return }
-        recorder.updateMeters()
-        let normalized = max(0, min(1, (Double(recorder.averagePower(forChannel: 0)) + 55) / 55))
+		if let error = captureSink.takeWriteError() {
+			logger.error("Audio capture failed: \(error.localizedDescription, privacy: .public)")
+			handleUnexpectedCaptureFailure()
+			return
+		}
+		guard captureSink.isCapturing else { return }
+		let normalized = captureSink.audioLevel
         audioLevel = normalized
         sharedStore.audioLevel = normalized
 		if Date().timeIntervalSince(lastHeartbeat) > 2 {
@@ -1268,8 +1330,8 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			create: true
 		).appendingPathComponent("PendingDictations", isDirectory: true)
 		try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-		// AVAudioRecorder picks its container from the extension, so linear PCM
-		// has to land in a .wav rather than the old .m4a.
+		// AVAudioFile picks its container from the extension. The flow engine's
+		// uncompressed PCM therefore lands in a WAV rather than the old M4A.
 		return folder
 			.appendingPathComponent("scribe-\(UUID().uuidString)")
 			.appendingPathExtension("wav")
@@ -1413,19 +1475,10 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
         backgroundTaskID = .invalid
     }
 
-	func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-		guard recorder === audioRecorder else { return }
-		if flag {
-			Task { await stopAndTranscribe() }
-		} else {
-			handleUnexpectedRecorderFailure()
-		}
-	}
-
-	private func handleFlowSessionRecorderStopped() {
+	private func handleFlowSessionEngineStopped() {
 		guard isSessionActive else { return }
-		if audioRecorder != nil {
-			handleUnexpectedRecorderFailure()
+		if recordingURL != nil {
+			handleUnexpectedCaptureFailure()
 			return
 		}
 
@@ -1455,16 +1508,8 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		currentRequestID = nil
 	}
 
-	func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
-		guard recorder === audioRecorder else { return }
-		if let error {
-			logger.error("Audio recorder failed: \(error.localizedDescription, privacy: .public)")
-		}
-		handleUnexpectedRecorderFailure()
-	}
-
-	private func handleUnexpectedRecorderFailure() {
-		audioRecorder = nil
+	private func handleUnexpectedCaptureFailure() {
+		_ = captureSink.stop()
 		recordingURL = nil
 		meterTask?.cancel()
 		meterTask = nil
