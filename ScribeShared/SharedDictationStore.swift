@@ -102,6 +102,28 @@ struct ClaimedTranscript: Equatable, Sendable {
     let text: String
 }
 
+/// Keeps a saved recording attached to the keyboard request that should
+/// receive its eventual transcript.
+///
+/// Build 30 persisted the recording path but not this request identity. When
+/// Retry was tapped in the containing app, transcription could succeed and the
+/// recording could be deleted without publishing anything back to the
+/// keyboard. The failed shared status is a safe migration source only when it
+/// explicitly advertises that the same saved recording is retryable.
+enum PendingRecordingDelivery {
+    static func requestID(
+        persistedRequestID: String?,
+        sharedStatus: DictationStatus
+    ) -> String? {
+        if let persistedRequestID, !persistedRequestID.isEmpty {
+            return persistedRequestID
+        }
+        guard sharedStatus.phase == .failed,
+              sharedStatus.retryAvailable else { return nil }
+        return sharedStatus.requestID
+    }
+}
+
 /// Pure rules for when a keyboard instance may take a finished transcript.
 ///
 /// Claiming marks the result consumed for every process sharing the App Group,

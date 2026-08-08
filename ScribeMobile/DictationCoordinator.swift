@@ -54,6 +54,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
     private var audioRecorder: AVAudioRecorder?
     private var recordingURL: URL?
 	private var pendingRecordingURL: URL?
+	private var pendingRecordingRequestID: String?
     private var meterTask: Task<Void, Never>?
 	private var sessionTask: Task<Void, Never>?
 	private var preparationHeartbeatTask: Task<Void, Never>?
@@ -72,6 +73,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 	private var currentRequestID: String?
 	private var requestGate = DictationRequestGate()
 	private let pendingRecordingPathKey = "mobile.pendingRecordingPath"
+	private let pendingRecordingRequestIDKey = "mobile.pendingRecordingRequestID"
 	/// Keys written by builds that still had a fallback model. The fallback is
 	/// gone; the keys just get cleaned up.
 	private let legacyPreferenceKeys = [
@@ -101,6 +103,13 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		if let path = UserDefaults.standard.string(forKey: pendingRecordingPathKey),
 		   FileManager.default.fileExists(atPath: path) {
 			pendingRecordingURL = URL(fileURLWithPath: path)
+			pendingRecordingRequestID = PendingRecordingDelivery.requestID(
+				persistedRequestID: UserDefaults.standard.string(forKey: pendingRecordingRequestIDKey),
+				sharedStatus: sharedStore.status
+			)
+			if let pendingRecordingRequestID {
+				UserDefaults.standard.set(pendingRecordingRequestID, forKey: pendingRecordingRequestIDKey)
+			}
 			canRetryFailedTranscription = true
 		}
 		let previousStatus = sharedStore.status
@@ -533,6 +542,7 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
             recordingURL = url
 			pendingRecordingURL = url
 			UserDefaults.standard.set(url.path, forKey: pendingRecordingPathKey)
+			rememberPendingRecordingRequest(currentRequestID)
             audioRecorder = recorder
 			if !isSessionActive {
 				isSessionActive = true
@@ -580,15 +590,11 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
         sharedStore.audioLevel = 0
         state = .transcribing
 		publishStatus(.transcribing, "Polishing your words…")
-		if isSessionActive {
-			guard restoreKeepAliveOrEndSession() else {
-				let message = "The background session ended. Your recording is saved—tap Retry."
-				state = .failed(message)
-				canRetryFailedTranscription = true
-				publishFailure(message, retryAvailable: true)
-				currentRequestID = nil
-				return
-			}
+		if isSessionActive, !restoreKeepAliveOrEndSession() {
+			// The keep-alive engine exists only to receive the *next* keyboard
+			// command. Losing it must not abort transcription of audio that is
+			// already complete and protected by a background task.
+			logger.warning("Background session ended after recording; continuing the current transcription")
 		}
 		await processPendingRecording(at: url)
 	}
@@ -611,16 +617,14 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			currentRequestID = nil
 			return
 		}
+		if currentRequestID == nil {
+			currentRequestID = pendingRecordingRequestID
+		}
 
 		state = .transcribing
 		publishStatus(.transcribing, "Retrying saved recording…")
 		if isSessionActive, !restoreKeepAliveOrEndSession() {
-			let message = "The background session ended. Reopen Scribe, then tap Retry."
-			state = .failed(message)
-			canRetryFailedTranscription = true
-			publishFailure(message, retryAvailable: true)
-			currentRequestID = nil
-			return
+			logger.warning("Background session ended during Retry; continuing the saved transcription")
 		}
 		await processPendingRecording(at: url)
 	}
@@ -629,7 +633,8 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 		guard !isTranscribing else { return }
 		isTranscribing = true
 		let generation = UUID()
-		let resultRequestID = currentRequestID
+		let resultRequestID = currentRequestID ?? pendingRecordingRequestID
+		rememberPendingRecordingRequest(resultRequestID)
 		transcriptionGeneration = generation
 		beginBackgroundTask()
 
@@ -1198,7 +1203,15 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 			try? FileManager.default.removeItem(at: pendingRecordingURL)
 		}
 		pendingRecordingURL = nil
+		pendingRecordingRequestID = nil
 		UserDefaults.standard.removeObject(forKey: pendingRecordingPathKey)
+		UserDefaults.standard.removeObject(forKey: pendingRecordingRequestIDKey)
+	}
+
+	private func rememberPendingRecordingRequest(_ requestID: String?) {
+		guard let requestID, !requestID.isEmpty else { return }
+		pendingRecordingRequestID = requestID
+		UserDefaults.standard.set(requestID, forKey: pendingRecordingRequestIDKey)
 	}
 
 	private func presentModelPreparationFailure(_ error: Error) {
@@ -1341,10 +1354,15 @@ final class DictationCoordinator: NSObject, ObservableObject, @preconcurrency AV
 
 		let interruptedRequestID = currentRequestID
 		let interruptedTranscription = isTranscribing
-		if interruptedTranscription {
-			transcriptionGeneration = nil
-		}
 		endFlowSession()
+		if interruptedTranscription {
+			// Core ML transcription does not depend on the microphone keep-alive
+			// engine. The background task owns this in-flight work, so let it
+			// finish and publish instead of converting a harmless session loss
+			// into a permanent saved-recording banner.
+			logger.warning("Background keep-alive stopped during transcription; allowing transcription to finish")
+			return
+		}
 
 		guard interruptedRequestID != nil || interruptedTranscription else { return }
 		canRetryFailedTranscription = pendingRecordingURL != nil

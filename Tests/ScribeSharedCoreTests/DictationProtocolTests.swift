@@ -80,6 +80,63 @@ final class DictationProtocolTests: XCTestCase {
         )
     }
 
+    func testPendingRecordingKeepsItsPersistedDeliveryRequest() {
+        var status = DictationStatus.idle
+        status.requestID = "newer-shared-status"
+        status.phase = .failed
+        status.retryAvailable = true
+
+        XCTAssertEqual(
+            PendingRecordingDelivery.requestID(
+                persistedRequestID: "recording-request",
+                sharedStatus: status
+            ),
+            "recording-request"
+        )
+    }
+
+    func testBuild30PendingRecordingRecoversRequestFromRetryableFailure() {
+        var status = DictationStatus.idle
+        status.requestID = "build-30-stop-request"
+        status.phase = .failed
+        status.retryAvailable = true
+
+        XCTAssertEqual(
+            PendingRecordingDelivery.requestID(
+                persistedRequestID: nil,
+                sharedStatus: status
+            ),
+            "build-30-stop-request"
+        )
+    }
+
+    func testPendingRecordingDoesNotAdoptUnrelatedSharedStatus() {
+        for phase in [DictationPhase.idle, .preparing, .recording, .transcribing, .completed] {
+            var status = DictationStatus.idle
+            status.requestID = "unrelated-request"
+            status.phase = phase
+            status.retryAvailable = true
+
+            XCTAssertNil(
+                PendingRecordingDelivery.requestID(
+                    persistedRequestID: nil,
+                    sharedStatus: status
+                )
+            )
+        }
+
+        var nonRetryableFailure = DictationStatus.idle
+        nonRetryableFailure.requestID = "unrelated-failure"
+        nonRetryableFailure.phase = .failed
+        nonRetryableFailure.retryAvailable = false
+        XCTAssertNil(
+            PendingRecordingDelivery.requestID(
+                persistedRequestID: nil,
+                sharedStatus: nonRetryableFailure
+            )
+        )
+    }
+
     func testTranscriptCanOnlyBeClaimedOnce() {
         store.publish(transcript: "Hello", for: "request-1", processID: "process-1")
 
