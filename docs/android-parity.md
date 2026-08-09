@@ -51,7 +51,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 11, the repository has local automated evidence for:
+As of Android `versionCode` 12, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -66,6 +66,9 @@ As of Android `versionCode` 11, the repository has local automated evidence for:
 - the exact 236,859-row iOS bigram corpus, context/frequency/tap-distance
   correction ranking, unambiguous contractions, and private accept/reject
   learning (the packaged corpus matches the source SHA-256);
+- an iOS-matched synchronous contraction fallback, so a fast `dont` plus Space
+  or punctuation cannot outrun the asynchronous candidate lookup, while
+  rejected and Personal Dictionary words remain protected;
 - the iOS-style resampled QWERTY swipe-path scorer, including neighboring
   start/end keys, shape-distance rejection, and corpus-frequency weighting;
 - gap-free touch regions that meet halfway across visual cap spacing, extend
@@ -101,7 +104,7 @@ As of Android `versionCode` 11, the repository has local automated evidence for:
   API 33 fallback, explicit installed/pending/downloadable model states, and
   generation-gated callbacks so stale support/download work cannot end a new
   dictation session;
-- all 57 Android unit tests, all 17 instrumentation tests on an API 36 emulator,
+- all 59 Android unit tests, all 17 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with

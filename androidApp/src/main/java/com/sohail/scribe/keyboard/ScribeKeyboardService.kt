@@ -467,13 +467,18 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             return null
         }
         val original = KeyboardEditingRules.currentWord(contextBefore()) ?: return null
-        val candidate = currentSuggestions.firstOrNull { it.automaticallyReplaces }
-            ?.takeIf { suggestionWord.equals(original, ignoreCase = true) }
-            ?: return null
+        val protectedWords = correctionLearning.protectedWordsSnapshot() +
+            userDictionarySnapshot.protectedWords
+        val replacement = KeyboardDelimiterCorrectionPolicy.replacement(
+            original = original,
+            suggestionWord = suggestionWord,
+            candidates = currentSuggestions,
+            protectedWords = protectedWords,
+        ) ?: return null
         currentInputConnection?.deleteSurroundingTextInCodePoints(original.codePointCount(0, original.length), 0)
-        currentInputConnection?.commitText(candidate.text, 1)
+        currentInputConnection?.commitText(replacement, 1)
         tapEvidence.clear()
-        return AppliedCorrection(original, candidate.text, delimiter)
+        return AppliedCorrection(original, replacement, delimiter)
     }
 
     private fun updateAfterDocumentChange() {
