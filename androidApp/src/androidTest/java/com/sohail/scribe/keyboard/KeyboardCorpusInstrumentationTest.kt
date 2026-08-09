@@ -16,6 +16,16 @@ class KeyboardCorpusInstrumentationTest {
         val typo = lexicon.corrections("teh")
         assertEquals("the", typo.firstOrNull()?.text?.lowercase())
         assertTrue(typo.first().automaticallyReplaces)
+        val centerTapTransposition = lexicon.corrections(
+            "teh",
+            evidence = listOf(
+                KeyboardTapEvidence('t', mapOf('t' to 0.0)),
+                KeyboardTapEvidence('e', mapOf('h' to 4.2)),
+                KeyboardTapEvidence('h', mapOf('e' to 3.8)),
+            ),
+        )
+        assertEquals("the", centerTapTransposition.firstOrNull()?.text?.lowercase())
+        assertTrue(centerTapTransposition.first().automaticallyReplaces)
 
         val contraction = lexicon.corrections("cant")
         assertEquals("can't", contraction.firstOrNull()?.text?.lowercase())

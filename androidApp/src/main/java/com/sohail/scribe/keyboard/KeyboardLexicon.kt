@@ -2,7 +2,7 @@ package com.sohail.scribe.keyboard
 
 import android.content.Context
 import com.sohail.scribe.core.KeyboardEditingRules
-import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.log10
 import kotlin.math.min
 
@@ -40,6 +40,15 @@ class KeyboardLexicon(context: Context) {
     ): List<CorrectionCandidate> {
         val source = original.lowercase()
         if (source.length < 2) return emptyList()
+        val protected = source in protectedWords
+        val preferredContraction = KeyboardEditingRules.preferredContraction(source)
+            ?.takeIf { !protected }
+            ?.let { contraction ->
+                CorrectionCandidate(
+                    matchCapitalization(contraction, original),
+                    automaticallyReplaces = true,
+                )
+            }
         val maximumDistance = when {
             source.length >= 8 -> 3
             source.length >= 4 -> 2
@@ -54,9 +63,12 @@ class KeyboardLexicon(context: Context) {
         } else {
             emptyList()
         }
-        if (source in exactWords) return completions
+        if (source in exactWords) {
+            return (listOfNotNull(preferredContraction) + completions)
+                .distinctBy { it.text.lowercase() }
+                .take(limit)
+        }
 
-        val protected = source in protectedWords
         val previousWord = KeyboardEditingRules.previousWord(contextBefore)?.lowercase()
         val sourceMask = letterMask(source)
         val possibleFirstLetters = firstLetterNeighbors(source.first())
@@ -106,10 +118,10 @@ class KeyboardLexicon(context: Context) {
                 )
             }
         }
-        KeyboardEditingRules.preferredContraction(source)?.takeIf { !protected }?.let { contraction ->
-            corrections = listOf(
-                CorrectionCandidate(matchCapitalization(contraction, original), automaticallyReplaces = true),
-            ) + corrections.filterNot { it.text.equals(contraction, ignoreCase = true) }
+        preferredContraction?.let { contraction ->
+            corrections = listOf(contraction) + corrections.filterNot {
+                it.text.equals(contraction.text, ignoreCase = true)
+            }
         }
         return (corrections + completions).distinctBy { it.text.lowercase() }.take(limit)
     }
@@ -210,37 +222,118 @@ class KeyboardLexicon(context: Context) {
     }
 }
 
-class SwipeWordDecoder(context: Context) {
-    private data class Entry(val word: String, val path: String, val rank: Int)
+class SwipeWordDecoder private constructor(words: List<String>) {
+    private data class Point(val x: Double, val y: Double)
+    private data class Entry(
+        val word: String,
+        val letters: String,
+        val rank: Int,
+        val path: List<Point>,
+    )
 
-    private val entriesByFirst = context.assets.open("SwipeWords.txt").bufferedReader().useLines { lines ->
-        lines.mapIndexedNotNull { index, raw ->
-            val word = raw.trim().lowercase()
-            word.takeIf { it.length >= 2 && it.all(Char::isLetter) }
-                ?.let { Entry(word, collapse(it), index) }
-        }.toList().groupBy { it.path.first() }
+    constructor(context: Context) : this(
+        context.assets.open("SwipeWords.txt").bufferedReader().useLines { lines ->
+            lines.map(String::trim).toList()
+        },
+    )
+
+    private val entriesByFirst: Map<Char, List<Entry>> = buildMap<Char, MutableList<Entry>> {
+        var rank = 0
+        words.forEach { raw ->
+            val word = raw.lowercase()
+            if (word.length < 2 || !word.all { it in 'a'..'z' }) return@forEach
+            val path = word.mapNotNull(KEY_POSITIONS::get).fold(mutableListOf<Point>()) { points, point ->
+                if (points.lastOrNull() != point) points += point
+                points
+            }
+            if (path.isEmpty()) return@forEach
+            rank += 1
+            getOrPut(word.first()) { mutableListOf() } += Entry(word, word, rank, path)
+        }
     }
 
     fun decode(keys: List<Char>): String? {
-        val path = collapse(keys.joinToString("").lowercase())
-        if (path.length < 2) return null
-        return entriesByFirst[path.first()].orEmpty()
-            .asSequence()
-            .filter { it.path.last() == path.last() }
-            .filter { abs(it.path.length - path.length) <= 4 }
-            .map { entry ->
-                val distance = KeyboardLexicon.correctionDistance(path, entry.path)
-                entry to (distance * 10_000 + entry.rank)
+        if (keys.size < 2) return null
+        val normalizedKeys = keys.map(Char::lowercaseChar)
+        val firstKey = normalizedKeys.first()
+        val lastKey = normalizedKeys.last()
+        val swipePath = resample(normalizedKeys.mapNotNull(KEY_POSITIONS::get))
+        if (swipePath.isEmpty()) return null
+
+        val firstLetters = KEY_POSITIONS.keys.filterTo(mutableSetOf(firstKey)) {
+            areNeighbors(firstKey, it)
+        }
+        var best: Pair<String, Double>? = null
+        firstLetters.forEach { firstLetter ->
+            entriesByFirst[firstLetter].orEmpty().forEach { entry ->
+                val lastLetter = entry.letters.last()
+                if (lastLetter != lastKey && !areNeighbors(lastLetter, lastKey)) return@forEach
+                val idealPath = resample(entry.path)
+                val shapeDistance = meanDistance(swipePath, idealPath)
+                if (shapeDistance >= MAXIMUM_SHAPE_DISTANCE) return@forEach
+
+                val startDistance = distance(swipePath.first(), idealPath.first())
+                val endDistance = distance(swipePath.last(), idealPath.last())
+                var score = -shapeDistance * 2.5
+                score -= (startDistance + endDistance) * 1.2
+                score += 3.0 * (1.0 - log10(entry.rank.toDouble() + 1.0) / 4.5)
+                if (best == null || score > best!!.second) best = entry.word to score
             }
-            .filter { (entry, score) -> score / 10_000 <= maxOf(2, entry.path.length / 3) }
-            .minByOrNull { it.second }
-            ?.first
-            ?.word
+        }
+        return best?.first
     }
 
     companion object {
-        private fun collapse(text: String): String = buildString {
-            text.forEach { if (lastOrNull() != it) append(it) }
+        private const val SAMPLE_COUNT = 32
+        private const val MAXIMUM_SHAPE_DISTANCE = 1.8
+        private val KEY_POSITIONS: Map<Char, Point> = buildMap {
+            listOf("qwertyuiop", "asdfghjkl", "zxcvbnm").forEachIndexed { rowIndex, row ->
+                val rowOffset = listOf(0.0, 0.5, 1.5)[rowIndex]
+                row.forEachIndexed { column, character ->
+                    put(character, Point(column + rowOffset, rowIndex.toDouble()))
+                }
+            }
         }
+
+        internal fun forWords(words: List<String>) = SwipeWordDecoder(words)
+
+        internal fun areNeighbors(first: Char, second: Char): Boolean {
+            val a = KEY_POSITIONS[first.lowercaseChar()] ?: return false
+            val b = KEY_POSITIONS[second.lowercaseChar()] ?: return false
+            val dx = a.x - b.x
+            val dy = a.y - b.y
+            return dx * dx + dy * dy <= 2.25
+        }
+
+        private fun resample(points: List<Point>): List<Point> {
+            val first = points.firstOrNull() ?: return emptyList()
+            if (points.size == 1) return List(SAMPLE_COUNT) { first }
+            val cumulative = MutableList(points.size) { 0.0 }
+            for (index in 1 until points.size) {
+                cumulative[index] = cumulative[index - 1] + distance(points[index], points[index - 1])
+            }
+            val total = cumulative.last()
+            if (total <= 0.0) return List(SAMPLE_COUNT) { first }
+
+            var segment = 1
+            return List(SAMPLE_COUNT) { sample ->
+                val target = total * sample / (SAMPLE_COUNT - 1).toDouble()
+                while (segment < points.lastIndex && cumulative[segment] < target) segment += 1
+                val segmentLength = (cumulative[segment] - cumulative[segment - 1]).coerceAtLeast(0.0001)
+                val fraction = (target - cumulative[segment - 1]) / segmentLength
+                val start = points[segment - 1]
+                val end = points[segment]
+                Point(
+                    start.x + (end.x - start.x) * fraction,
+                    start.y + (end.y - start.y) * fraction,
+                )
+            }
+        }
+
+        private fun meanDistance(first: List<Point>, second: List<Point>): Double =
+            (0 until SAMPLE_COUNT).sumOf { distance(first[it], second[it]) } / SAMPLE_COUNT
+
+        private fun distance(first: Point, second: Point): Double =
+            hypot(first.x - second.x, first.y - second.y)
     }
 }

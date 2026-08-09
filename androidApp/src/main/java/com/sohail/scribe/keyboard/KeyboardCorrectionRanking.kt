@@ -61,6 +61,10 @@ object KeyboardCorrectionRanking {
         evidence: List<KeyboardTapEvidence?>,
     ): Double {
         if (original.length != candidate.length) return NEUTRAL_SPATIAL_COST
+        // Adjacent transposition is a timing/order slip, not an aiming error.
+        // Mapping each tap to the opposite letter would otherwise punish the
+        // intended correction twice and let a less plausible insertion win.
+        if (isAdjacentTransposition(original, candidate)) return NEUTRAL_SPATIAL_COST
         var differences = 0
         var total = 0.0
         original.indices.forEach { index ->
@@ -68,12 +72,21 @@ object KeyboardCorrectionRanking {
             differences += 1
             val tap = evidence.getOrNull(index)
             total += if (tap?.character == original[index]) {
-                tap.normalizedDistances[candidate[index]] ?: UNREACHABLE_SPATIAL_COST
+                (tap.normalizedDistances[candidate[index]] ?: UNREACHABLE_SPATIAL_COST)
+                    .coerceAtMost(UNREACHABLE_SPATIAL_COST)
             } else {
                 NEUTRAL_SPATIAL_COST
             }
         }
         return if (differences == 0) 0.0 else total / differences
+    }
+
+    private fun isAdjacentTransposition(original: String, candidate: String): Boolean {
+        val differences = original.indices.filter { original[it] != candidate[it] }
+        return differences.size == 2 &&
+            differences[1] == differences[0] + 1 &&
+            original[differences[0]] == candidate[differences[1]] &&
+            original[differences[1]] == candidate[differences[0]]
     }
 
     fun pairKey(original: String, replacement: String): String =

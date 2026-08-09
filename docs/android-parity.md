@@ -39,7 +39,7 @@ implementation and the listed runtime evidence exist.
 | Hold-delete and delete-word behavior | repeating deletion and word-delete gesture/action | unit and device checks |
 | Double-space period and automatic capitalization | context-aware Android editing rules | unit tests across sentence/word fields |
 | Conservative autocorrect, candidates, undo | bundled lexicon, edit-distance ranking, composing/candidate surface | corpus tests and device QA |
-| Word swipe | path decoder using the shared frequency word list | decoder tests and device QA |
+| Word swipe | resampled QWERTY shape decoder with endpoint and frequency weighting over the shared word list | decoder tests and device QA |
 | Space-bar cursor mode | horizontal drag mapped to selection movement | editable-field device QA |
 | Host field traits | `EditorInfo.inputType`/`imeOptions` layouts and action labels | number, phone, email, URL, password, search tests |
 | Globe/input-mode switch | system next-input-method action | multi-keyboard device QA |
@@ -51,7 +51,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 3, the repository has local automated evidence for:
+As of Android `versionCode` 4, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, email, URL, password, multiline, and search/action behavior;
@@ -64,21 +64,31 @@ As of Android `versionCode` 3, the repository has local automated evidence for:
 - the exact 236,859-row iOS bigram corpus, context/frequency/tap-distance
   correction ranking, unambiguous contractions, and private accept/reject
   learning (the packaged corpus matches the source SHA-256);
+- the iOS-style resampled QWERTY swipe-path scorer, including neighboring
+  start/end keys, shape-distance rejection, and corpus-frequency weighting;
+- gap-free touch regions that meet halfway across visual cap spacing, extend
+  outer keys to the keyboard edges, compensate for vertical finger aim, and
+  stop resolving after the finger leaves the keyboard;
+- a visible, TalkBack-labelled one-tap autocorrection undo for both automatic
+  and manually selected candidates, plus character-evidence preservation while
+  deleting within a word;
+- a conditional next-input-method key and an in-place landscape IME instead of
+  Android's fullscreen extracted editor;
 - the API 34 model-download progress/success/scheduled/error contract, with an
   API 33 fallback and explicit installed/pending/downloadable model states;
-- unit tests, Android instrumentation-test compilation, APK assembly, lint, and
-  a manifest with no `INTERNET` permission.
+- unit tests, all eight Android instrumentation tests on an API 36 emulator,
+  APK assembly, lint, and a manifest with no `INTERNET` permission;
+- live IME correction of `teh` to `the ` and explicit restoration to `teh `,
+  typing into Chrome's address field, and an in-place landscape session with
+  Android reporting `mFullscreenMode=false`.
 
-The existing emulator has only 318 MB free in `/data`, so Android rejects the
-31 MB debug APK at its low-storage threshold. A clean isolated AVD with a 6 GB
-data partition was also attempted, but this host denied the emulator's
-executable-memory mapping and the guest remained offline; the failed AVD was
-moved to Trash without touching the existing emulator or unrelated app data.
-Therefore the field-mode, corpus, Compose-flow, private-store, and virtual-node
-instrumentation tests still require a physical device or a functioning emulator.
-The TalkBack audit, third-party app matrix, airplane-mode dictation, tablet and
-landscape screenshots, and Android tester distribution remain open runtime
-evidence—not completed rows.
+The emulator's package-manager low-storage threshold was reduced only for APK
+installation and instrumentation, then restored; no unrelated app data was
+deleted. The remaining release evidence is a physical-device TalkBack audit,
+airplane-mode dictation with audible speech, the complete two-third-party-app
+field matrix, tablet/foldable visual QA, a production-signed Android artifact,
+and Android tester distribution. Those rows remain open rather than inferred
+from emulator or unit-test results.
 
 ## Known platform substitutions
 

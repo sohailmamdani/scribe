@@ -33,6 +33,26 @@ class KeyboardCorrectionRankingTest {
         )
     }
 
+    @Test fun transpositionIsTimingEvidenceAndFarDistancesAreClamped() {
+        val transposedEvidence = listOf(
+            KeyboardTapEvidence('t', mapOf('t' to 0.0)),
+            KeyboardTapEvidence('e', mapOf('h' to 4.2)),
+            KeyboardTapEvidence('h', mapOf('e' to 3.8)),
+        )
+        assertEquals(
+            KeyboardCorrectionRanking.NEUTRAL_SPATIAL_COST,
+            KeyboardCorrectionRanking.spatialCost("teh", "the", transposedEvidence),
+        )
+        assertEquals(
+            KeyboardCorrectionRanking.UNREACHABLE_SPATIAL_COST,
+            KeyboardCorrectionRanking.spatialCost(
+                "cat",
+                "cut",
+                listOf(null, KeyboardTapEvidence('a', mapOf('u' to 5.0)), null),
+            ),
+        )
+    }
+
     @Test fun ambiguousWinnerSuggestsInsteadOfReplacing() {
         val ranked = KeyboardCorrectionRanking.rank(
             listOf(

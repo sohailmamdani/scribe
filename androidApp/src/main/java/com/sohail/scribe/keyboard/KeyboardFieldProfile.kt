@@ -105,6 +105,7 @@ object KeyboardAccessibilityLabels {
             "microphone" -> if (visibleLabel == "Stop") "Stop dictation" else "Start dictation"
             "cancel" -> "Cancel dictation"
             "undo-dictation" -> "Undo last dictation"
+            "undo-autocorrection" -> "Undo autocorrection to ${visibleLabel.removePrefix("Undo to ")}"
             "mode" -> if (visibleLabel == "ABC") "Letters" else "Numbers and symbols"
             "more-symbols" -> if (visibleLabel == "123") "Numbers" else "More symbols"
             "period" -> "Period"

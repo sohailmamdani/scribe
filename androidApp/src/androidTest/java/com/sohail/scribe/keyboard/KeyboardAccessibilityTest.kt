@@ -31,7 +31,7 @@ class KeyboardAccessibilityTest {
             assertNotNull(provider)
             val firstKey = provider!!.createAccessibilityNodeInfo(0)
             assertNotNull(firstKey)
-            assertEquals("Q, alternate 1", firstKey!!.contentDescription.toString())
+            assertEquals("q, alternate 1", firstKey!!.contentDescription.toString())
         }
     }
 
@@ -71,5 +71,26 @@ class KeyboardAccessibilityTest {
             reloaded.acceptedCountsSnapshot()[KeyboardCorrectionRanking.pairKey("teh", "the")],
         )
         assertEquals(true, "wrod" in reloaded.protectedWordsSnapshot())
+    }
+
+    @Test fun explicitAutocorrectionUndoIsExposedToTalkBack() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val view = ScribeKeyboardView(instrumentation.targetContext)
+            view.updateAutocorrectionUndoOriginal("teh")
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(1_080, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY),
+            )
+            view.layout(0, 0, 1_080, 900)
+
+            assertEquals(
+                "Undo autocorrection to teh",
+                view.accessibilityNodeProvider
+                    ?.createAccessibilityNodeInfo(0)
+                    ?.contentDescription
+                    ?.toString(),
+            )
+        }
     }
 }

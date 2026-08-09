@@ -66,9 +66,14 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         view.listener = this
         view.updatePreferences(preferences)
         view.updateFieldProfile(fieldProfile)
+        view.updateOffersInputModeSwitch(shouldOfferSwitchingToNextInputMethod())
         view.updateSpeechState(speechState, speechMessage, partialTranscript, audioLevel)
+        view.updateAutocorrectionUndoOriginal(lastCorrection?.original)
         updateAutomaticShift()
     }
+
+    /** Keep the custom keyboard visible in landscape instead of Android's extract editor. */
+    override fun onEvaluateFullscreenMode(): Boolean = false
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
@@ -96,9 +101,11 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         suggestionWord = null
         keyboardView?.updatePreferences(preferences)
         keyboardView?.updateFieldProfile(fieldProfile)
+        keyboardView?.updateOffersInputModeSwitch(shouldOfferSwitchingToNextInputMethod())
         keyboardView?.updateSpeechState(speechState, speechMessage, partialTranscript, audioLevel)
         keyboardView?.updateSuggestions(emptyList())
         keyboardView?.updateUndoDictationAvailability(false)
+        keyboardView?.updateAutocorrectionUndoOriginal(null)
         updateAutomaticShift()
         refreshSuggestions()
     }
@@ -126,6 +133,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         if (!isLetter && text.singleOrNull() in listOf('.', ',', '?', '!', ';', ':')) {
             lastCorrection = applyAutomaticCorrection(text)
             currentInputConnection?.commitText(text, 1)
+            updateAutocorrectionUndoAvailability()
         } else {
             currentInputConnection?.commitText(text, 1)
         }
@@ -134,21 +142,12 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onDelete() {
         clearDictationUndo()
-        tapEvidence.clear()
         lastSpaceTapMillis = null
-        val correction = lastCorrection
-        val before = contextBefore()
-        if (correction != null && before?.endsWith(correction.replacement + correction.delimiter) == true) {
-            currentInputConnection?.deleteSurroundingTextInCodePoints(
-                correction.replacement.codePointCount(0, correction.replacement.length) +
-                    correction.delimiter.codePointCount(0, correction.delimiter.length),
-                0,
-            )
-            currentInputConnection?.commitText(correction.original + correction.delimiter, 1)
-            correctionLearning.recordRejected(correction.original, correction.replacement)
-            lastCorrection = null
+        if (undoLastAutocorrection()) {
+            tapEvidence.clear()
         } else {
             acceptPendingCorrection()
+            if (tapEvidence.isNotEmpty()) tapEvidence.removeAt(tapEvidence.lastIndex)
             currentInputConnection?.deleteSurroundingTextInCodePoints(1, 0)
         }
         updateAfterDocumentChange()
@@ -183,6 +182,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             val correction = applyAutomaticCorrection(" ")
             currentInputConnection?.commitText(" ", 1)
             lastCorrection = correction
+            updateAutocorrectionUndoAvailability()
             lastSpaceTapMillis = now
         }
         tapEvidence.clear()
@@ -257,7 +257,16 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         currentInputConnection?.commitText(candidate.text + " ", 1)
         correctionLearning.recordAccepted(word, candidate.text)
         tapEvidence.clear()
-        lastCorrection = null
+        lastCorrection = AppliedCorrection(word, candidate.text, " ")
+        updateAutocorrectionUndoAvailability()
+        updateAfterDocumentChange()
+    }
+
+    override fun onUndoAutocorrection() {
+        clearDictationUndo()
+        lastSpaceTapMillis = null
+        tapEvidence.clear()
+        undoLastAutocorrection()
         updateAfterDocumentChange()
     }
 
@@ -396,6 +405,31 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         val correction = lastCorrection ?: return
         correctionLearning.recordAccepted(correction.original, correction.replacement)
         lastCorrection = null
+        updateAutocorrectionUndoAvailability()
+    }
+
+    private fun undoLastAutocorrection(): Boolean {
+        val correction = lastCorrection ?: return false
+        val suffix = correction.replacement + correction.delimiter
+        val before = contextBefore()
+        if (before?.endsWith(suffix) != true) {
+            lastCorrection = null
+            updateAutocorrectionUndoAvailability()
+            return false
+        }
+        currentInputConnection?.deleteSurroundingTextInCodePoints(
+            suffix.codePointCount(0, suffix.length),
+            0,
+        )
+        currentInputConnection?.commitText(correction.original + correction.delimiter, 1)
+        correctionLearning.recordRejected(correction.original, correction.replacement)
+        lastCorrection = null
+        updateAutocorrectionUndoAvailability()
+        return true
+    }
+
+    private fun updateAutocorrectionUndoAvailability() {
+        keyboardView?.updateAutocorrectionUndoOriginal(lastCorrection?.original)
     }
 
     private fun refreshSuggestions() {

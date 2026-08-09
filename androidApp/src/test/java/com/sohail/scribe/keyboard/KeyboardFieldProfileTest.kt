@@ -97,6 +97,10 @@ class KeyboardFieldProfileTest {
         assertEquals("Search", KeyboardAccessibilityLabels.labelFor("return", "search"))
         assertEquals("Start dictation", KeyboardAccessibilityLabels.labelFor("microphone", "Dictate"))
         assertEquals("Stop dictation", KeyboardAccessibilityLabels.labelFor("microphone", "Stop"))
+        assertEquals(
+            "Undo autocorrection to teh",
+            KeyboardAccessibilityLabels.labelFor("undo-autocorrection", "Undo to teh"),
+        )
         assertEquals("A, alternate At sign", KeyboardAccessibilityLabels.labelFor("key-a", "A", "@"))
         assertEquals("Question mark", KeyboardAccessibilityLabels.labelFor("symbol-?-0", "?"))
     }

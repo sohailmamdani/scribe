@@ -16,4 +16,20 @@ class KeyboardLexiconTest {
         assertEquals("hello", KeyboardLexicon.matchCapitalization("hello", "helo"))
         assertTrue(KeyboardLexicon.matchCapitalization("i'm", "im").startsWith("I"))
     }
+
+    @Test fun swipeDecoderUsesResampledQwertyShapeAndFrequency() {
+        val decoder = SwipeWordDecoder.forWords(
+            listOf("hello", "helo", "help", "held", "gel", "world", "word"),
+        )
+
+        assertEquals("hello", decoder.decode(listOf('h', 'e', 'l', 'o')))
+        assertEquals("world", decoder.decode(listOf('w', 'o', 'r', 'l', 'd')))
+        assertEquals(null, decoder.decode(listOf('q', 'z')))
+    }
+
+    @Test fun swipeEndpointsAcceptOnlyQwertyNeighbors() {
+        assertTrue(SwipeWordDecoder.areNeighbors('h', 'g'))
+        assertTrue(SwipeWordDecoder.areNeighbors('o', 'p'))
+        assertTrue(!SwipeWordDecoder.areNeighbors('q', 'm'))
+    }
 }
