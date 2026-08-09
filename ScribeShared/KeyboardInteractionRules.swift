@@ -41,6 +41,63 @@ enum KeyboardAlternateSymbols {
     }
 }
 
+/// The two symbol pages mirror Gboard's familiar English layout. Keeping the
+/// rows in the shared target makes the visual contract testable without
+/// launching a keyboard extension.
+enum KeyboardSymbolLayouts {
+    static let numbers: [[Character]] = [
+        Array("1234567890"),
+        Array("-/:;()$&@\""),
+        Array(".,?!'"),
+    ]
+
+    static let symbols: [[Character]] = [
+        Array("[]{}#%^*+="),
+        Array("_\\|~<>€£¥"),
+        Array(".,?!'"),
+    ]
+}
+
+/// Gboard's period key expands into two rows of punctuation. The popup is
+/// right-aligned with the period key, so hit resolution accepts coordinates in
+/// that key's local space even when the finger has travelled far to the left.
+enum KeyboardPunctuationPalette {
+    static let rows: [[Character]] = [
+        Array("&%+\"-:'@"),
+        Array(";/()#!,?"),
+    ]
+
+    static var columnCount: Int { rows.map(\.count).max() ?? 0 }
+
+    static func symbol(
+        atX x: Double,
+        y: Double,
+        anchorKeyWidth: Double,
+        popupWidth: Double,
+        popupHeight: Double,
+        gap: Double
+    ) -> Character? {
+        guard columnCount > 0,
+              popupWidth > 0,
+              popupHeight > 0 else { return nil }
+
+        let minX = anchorKeyWidth - popupWidth
+        let minY = -(popupHeight + gap)
+        let maxY = -gap
+        guard x >= minX,
+              x <= anchorKeyWidth,
+              y >= minY,
+              y <= maxY else { return nil }
+
+        let cellWidth = popupWidth / Double(columnCount)
+        let cellHeight = popupHeight / Double(rows.count)
+        let column = min(columnCount - 1, max(0, Int((x - minX) / cellWidth)))
+        let row = min(rows.count - 1, max(0, Int((y - minY) / cellHeight)))
+        guard column < rows[row].count else { return nil }
+        return rows[row][column]
+    }
+}
+
 enum KeyboardGestureResolution: Equatable {
     case primary
     case alternatePreview

@@ -70,6 +70,11 @@ struct KeyboardRootView: View {
     @State private var spaceCursorStep = 0
     @State private var spaceTouchStartX: CGFloat?
     @State private var spaceHoldTask: Task<Void, Never>?
+    @State private var punctuationGestureIsActive = false
+    @State private var punctuationIsPressed = false
+    @State private var punctuationPopupVisible = false
+    @State private var punctuationSelection: Character?
+    @State private var punctuationHoldTask: Task<Void, Never>?
     @State private var dictationWakeFallbackTask: Task<Void, Never>?
 
     private static let keySpace = "keyArea"
@@ -175,6 +180,7 @@ struct KeyboardRootView: View {
             correctionTask = nil
             cancelActiveTouch()
             cancelSpaceGesture()
+            cancelPunctuationGesture()
         }
     }
 
@@ -249,6 +255,7 @@ struct KeyboardRootView: View {
             let totalWidth = Double(proxy.size.width)
             let characterWidth = CGFloat(geometry.tenColumnKeyWidth(totalWidth: totalWidth))
             let homeInset = CGFloat(geometry.homeRowInset(totalWidth: totalWidth))
+            let secondRowInset = activeRows[1].count == 9 ? homeInset : 0
             let controlGap = CGFloat(geometry.controlToLetterGap(totalWidth: totalWidth))
             let controlWidth = CGFloat(geometry.controlWidth(totalWidth: totalWidth))
 			let thirdRowCharacters = activeRows[2]
@@ -262,7 +269,7 @@ struct KeyboardRootView: View {
             VStack(spacing: verticalGap) {
                 characterRow(activeRows[0], width: characterWidth)
                 characterRow(activeRows[1], width: characterWidth)
-                    .padding(.horizontal, homeInset)
+                    .padding(.horizontal, secondRowInset)
 				if layout == .letters {
 					HStack(spacing: 0) {
 						keyCap(
@@ -408,6 +415,11 @@ struct KeyboardRootView: View {
             let standardControlWidth = min(102, max(78, availableWidth * 0.24))
             let modeWidth = documentState.needsInputModeSwitchKey ? CGFloat(72) : standardControlWidth
             let returnWidth = documentState.needsInputModeSwitchKey ? CGFloat(78) : standardControlWidth
+            let punctuationWidth = usesCompactMetrics ? CGFloat(43) : CGFloat(46)
+            let punctuationPopupWidth = min(
+                320,
+                availableWidth - returnWidth - horizontalGap
+            )
 
             HStack(spacing: horizontalGap) {
                 if documentState.needsInputModeSwitchKey {
@@ -419,6 +431,7 @@ struct KeyboardRootView: View {
                     if layout == .letters { refreshAutomaticShift() }
                 }
                 spaceKey
+                punctuationKey(width: punctuationWidth, popupWidth: punctuationPopupWidth)
                 bottomKey(systemName: "return", width: returnWidth) {
                     insertDelimiter("\n")
                 }
@@ -433,9 +446,9 @@ struct KeyboardRootView: View {
         case .letters:
             [Array("qwertyuiop"), Array("asdfghjkl"), Array("zxcvbnm")]
         case .numbers:
-            [Array("-/:;()$&@\""), Array(".,?!'…"), Array("_\\|~<>€£¥")]
+            KeyboardSymbolLayouts.numbers
         case .symbols:
-            [Array("[]{}#%^*+="), Array("_\\|~<>€£¥"), Array(".,?!'…")]
+            KeyboardSymbolLayouts.symbols
         }
     }
 
@@ -538,9 +551,6 @@ struct KeyboardRootView: View {
 
     private func alternateSymbol(for character: Character) -> Character? {
         guard documentState.preferences.alternateSymbolsEnabled else { return nil }
-        if character.isNumber {
-            return KeyboardAlternateSymbols.alternate(for: character)
-        }
         guard layout == .letters, character.isLetter else { return nil }
         return KeyboardAlternateSymbols.alternate(for: character)
     }
@@ -626,6 +636,133 @@ struct KeyboardRootView: View {
             .accessibilityAction { spaceTapped() }
     }
 
+    private func punctuationKey(width: CGFloat, popupWidth: CGFloat) -> some View {
+        Text(".")
+            .font(.system(size: 18))
+            .foregroundStyle(.primary)
+            .frame(width: width, height: keyHeight)
+            .background(
+                punctuationIsPressed ? Color(.systemGray2) : Color(.systemGray3),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
+            .contentShape(Rectangle())
+            .overlay {
+                KeyboardTouchSurface(
+                    onBegan: beginPunctuationGesture,
+                    onMoved: { point in
+                        movePunctuationGesture(
+                            to: point,
+                            keyWidth: width,
+                            popupWidth: popupWidth
+                        )
+                    },
+                    onEnded: endPunctuationGesture,
+                    onCancelled: cancelPunctuationGesture
+                )
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if punctuationPopupVisible {
+                    punctuationPopup(width: popupWidth)
+                        .offset(y: -(keyHeight + Self.punctuationPopupGap))
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomTrailing)))
+                        .allowsHitTesting(false)
+                }
+            }
+            .zIndex(punctuationPopupVisible ? 10 : 0)
+            .accessibilityElement()
+            .accessibilityLabel("Period")
+            .accessibilityHint("Tap for a period. Touch and hold, then slide for punctuation.")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { insertDelimiter(".") }
+    }
+
+    private static let punctuationPopupGap: CGFloat = 8
+    private var punctuationPopupHeight: CGFloat { usesCompactMetrics ? 58 : 88 }
+
+    private func punctuationPopup(width: CGFloat) -> some View {
+        let rows = KeyboardPunctuationPalette.rows
+        return VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 0) {
+                    ForEach(row, id: \.self) { symbol in
+                        Text(String(symbol))
+                            .font(.system(size: usesCompactMetrics ? 16 : 21))
+                            .foregroundStyle(punctuationSelection == symbol ? .white : .primary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(
+                                punctuationSelection == symbol ? Color.indigo : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            )
+                    }
+                }
+            }
+        }
+        .padding(4)
+        .frame(width: width, height: punctuationPopupHeight)
+        .background(
+            Color(.systemGray3),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .shadow(color: .black.opacity(0.24), radius: 5, y: 2)
+    }
+
+    private func beginPunctuationGesture(at _: CGPoint) {
+        cancelSpaceGesture()
+        punctuationGestureIsActive = true
+        punctuationIsPressed = true
+        punctuationPopupVisible = false
+        punctuationSelection = nil
+        KeyboardHaptics.keyDown()
+        punctuationHoldTask?.cancel()
+        guard documentState.preferences.alternateSymbolsEnabled else { return }
+        let delay = documentState.preferences.alternateHoldDelayMilliseconds
+        punctuationHoldTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(delay))
+            guard !Task.isCancelled,
+                  punctuationGestureIsActive else { return }
+            punctuationPopupVisible = true
+            KeyboardHaptics.keyDown()
+        }
+    }
+
+    private func movePunctuationGesture(
+        to point: CGPoint,
+        keyWidth: CGFloat,
+        popupWidth: CGFloat
+    ) {
+        guard punctuationGestureIsActive,
+              punctuationPopupVisible else { return }
+        let selection = KeyboardPunctuationPalette.symbol(
+            atX: Double(point.x),
+            y: Double(point.y),
+            anchorKeyWidth: Double(keyWidth),
+            popupWidth: Double(popupWidth),
+            popupHeight: Double(punctuationPopupHeight),
+            gap: Double(Self.punctuationPopupGap)
+        )
+        if punctuationSelection != selection, selection != nil {
+            KeyboardHaptics.keyDown()
+        }
+        punctuationSelection = selection
+    }
+
+    private func endPunctuationGesture(at _: CGPoint) {
+        guard punctuationGestureIsActive else { return }
+        let selection = punctuationSelection
+        cancelPunctuationGesture()
+        insertDelimiter(String(selection ?? "."))
+    }
+
+    private func cancelPunctuationGesture() {
+        punctuationHoldTask?.cancel()
+        punctuationHoldTask = nil
+        punctuationGestureIsActive = false
+        punctuationIsPressed = false
+        punctuationPopupVisible = false
+        punctuationSelection = nil
+    }
+
     private func moveSpaceGesture(to point: CGPoint) {
         guard spaceGestureIsActive,
               spaceCursorMode,
@@ -648,6 +785,7 @@ struct KeyboardRootView: View {
     }
 
     private func beginSpaceGesture(at point: CGPoint) {
+        cancelPunctuationGesture()
         spaceGestureIsActive = true
         spaceIsPressed = true
         spaceCursorStep = 0

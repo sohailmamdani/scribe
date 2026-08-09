@@ -2,6 +2,63 @@ import XCTest
 @testable import ScribeSharedCore
 
 final class KeyboardInteractionRulesTests: XCTestCase {
+    func testGboardNumberAndSymbolRows() {
+        XCTAssertEqual(
+            KeyboardSymbolLayouts.numbers,
+            [Array("1234567890"), Array("-/:;()$&@\""), Array(".,?!'")]
+        )
+        XCTAssertEqual(
+            KeyboardSymbolLayouts.symbols,
+            [Array("[]{}#%^*+="), Array("_\\|~<>€£¥"), Array(".,?!'")]
+        )
+    }
+
+    func testPunctuationPaletteMatchesGboardAndResolvesDragSelection() {
+        XCTAssertEqual(
+            KeyboardPunctuationPalette.rows,
+            [Array("&%+\"-:'@"), Array(";/()#!,?")]
+        )
+        XCTAssertEqual(KeyboardPunctuationPalette.columnCount, 8)
+
+        let popupWidth = 320.0
+        let popupHeight = 88.0
+        let keyWidth = 46.0
+        let gap = 8.0
+
+        XCTAssertEqual(
+            KeyboardPunctuationPalette.symbol(
+                atX: keyWidth - popupWidth + 20,
+                y: -(popupHeight + gap) + 22,
+                anchorKeyWidth: keyWidth,
+                popupWidth: popupWidth,
+                popupHeight: popupHeight,
+                gap: gap
+            ),
+            "&"
+        )
+        XCTAssertEqual(
+            KeyboardPunctuationPalette.symbol(
+                atX: keyWidth - 20,
+                y: -gap - 22,
+                anchorKeyWidth: keyWidth,
+                popupWidth: popupWidth,
+                popupHeight: popupHeight,
+                gap: gap
+            ),
+            "?"
+        )
+        XCTAssertNil(
+            KeyboardPunctuationPalette.symbol(
+                atX: keyWidth / 2,
+                y: keyWidth / 2,
+                anchorKeyWidth: keyWidth,
+                popupWidth: popupWidth,
+                popupHeight: popupHeight,
+                gap: gap
+            )
+        )
+    }
+
     func testAllUSKeyboardAlternates() {
         let expected: [Character: Character] = [
             "1": "!", "2": "@", "3": "#", "4": "$", "5": "%",
