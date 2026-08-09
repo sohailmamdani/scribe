@@ -60,7 +60,11 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         historyStore = DictationHistoryStore(this)
         correctionLearning = KeyboardCorrectionLearningStore(this)
         userDictionary = AndroidUserDictionary(this)
-        speechSession = OnDeviceSpeechSession(this, this)
+        speechSession = OnDeviceSpeechSession(
+            context = this,
+            listener = this,
+            formattingEnabled = { preferences.enhancedPunctuationEnabled },
+        )
         worker.execute {
             val loadedLexicon = KeyboardLexicon(this)
             val loadedSwipeDecoder = SwipeWordDecoder(this)

@@ -21,6 +21,7 @@ class MainActivityTest {
         scrollTo("home-list", "Private by design")
 
         compose.onNodeWithContentDescription("Keyboard settings").performClick()
+        compose.onNodeWithText("Enhanced on-device punctuation").assertIsDisplayed()
         compose.onNodeWithText("Autocorrection").assertIsDisplayed()
         compose.onNodeWithText("Swipe typing").assertIsDisplayed()
         scrollTo("settings-list", "Alternate symbols")

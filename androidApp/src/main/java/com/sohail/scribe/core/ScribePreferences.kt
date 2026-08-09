@@ -16,6 +16,7 @@ data class KeyboardPreferences(
     val doubleSpacePeriodEnabled: Boolean = true,
     val autocorrectionEnabled: Boolean = true,
     val swipeTypingEnabled: Boolean = true,
+    val enhancedPunctuationEnabled: Boolean = true,
 ) {
     fun normalized() = copy(alternateHoldDelayMillis = alternateHoldDelayMillis.coerceIn(250, 1_200))
 }
@@ -39,6 +40,7 @@ class ScribePreferences(context: Context) {
             doubleSpacePeriodEnabled = store.getBoolean(KEY_DOUBLE_SPACE, true),
             autocorrectionEnabled = store.getBoolean(KEY_AUTOCORRECTION, true),
             swipeTypingEnabled = store.getBoolean(KEY_SWIPE, true),
+            enhancedPunctuationEnabled = store.getBoolean(KEY_ENHANCED_PUNCTUATION, true),
         ).normalized()
         set(value) {
             val normalized = value.normalized()
@@ -52,6 +54,7 @@ class ScribePreferences(context: Context) {
                 .putBoolean(KEY_DOUBLE_SPACE, normalized.doubleSpacePeriodEnabled)
                 .putBoolean(KEY_AUTOCORRECTION, normalized.autocorrectionEnabled)
                 .putBoolean(KEY_SWIPE, normalized.swipeTypingEnabled)
+                .putBoolean(KEY_ENHANCED_PUNCTUATION, normalized.enhancedPunctuationEnabled)
                 .apply()
         }
 
@@ -70,5 +73,6 @@ class ScribePreferences(context: Context) {
         private const val KEY_DOUBLE_SPACE = "keyboard.doubleSpacePeriod"
         private const val KEY_AUTOCORRECTION = "keyboard.autocorrection"
         private const val KEY_SWIPE = "keyboard.swipeTyping"
+        private const val KEY_ENHANCED_PUNCTUATION = "dictation.enhancedPunctuation"
     }
 }

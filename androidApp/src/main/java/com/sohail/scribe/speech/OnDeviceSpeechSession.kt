@@ -89,6 +89,7 @@ interface SpeechSessionListener {
 class OnDeviceSpeechSession(
     context: Context,
     private val listener: SpeechSessionListener,
+    private val formattingEnabled: () -> Boolean = { true },
     private val modelStatusListener: (OnDeviceModelStatus) -> Unit = {},
 ) : RecognitionListener {
     private val appContext = context.applicationContext
@@ -116,7 +117,12 @@ class OnDeviceSpeechSession(
             val activeRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
             recognizer = activeRecognizer
             activeRecognizer.setRecognitionListener(gatedRecognitionListener(token))
-            activeRecognizer.startListening(onDeviceRecognizerIntent(languageTag))
+            activeRecognizer.startListening(
+                onDeviceRecognizerIntent(
+                    languageTag,
+                    enableFormatting = formattingEnabled(),
+                ),
+            )
         } catch (error: RuntimeException) {
             destroyRecognizer(token)
             listener.onStateChanged(SpeechSessionState.FAILED, startFailureMessage(error))

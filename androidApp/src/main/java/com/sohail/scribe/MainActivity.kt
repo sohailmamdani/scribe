@@ -100,7 +100,12 @@ class MainActivity : ComponentActivity(), SpeechSessionListener {
         super.onCreate(savedInstanceState)
         historyStore = DictationHistoryStore(this)
         preferenceStore = ScribePreferences(this)
-        speechSession = OnDeviceSpeechSession(this, this) { onDeviceModelStatus = it }
+        speechSession = OnDeviceSpeechSession(
+            context = this,
+            listener = this,
+            formattingEnabled = { keyboardPreferences.enhancedPunctuationEnabled },
+            modelStatusListener = { onDeviceModelStatus = it },
+        )
         refreshState()
 
         setContent {
@@ -603,6 +608,16 @@ private fun KeyboardSettingsPage(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item { SettingsHeader("Dictation") }
+        item {
+            SettingsToggle(
+                title = "Enhanced on-device punctuation",
+                checked = preferences.enhancedPunctuationEnabled,
+                detail = "Lets Android add punctuation and capitalization on device. Scribe keeps the raw result if any words change.",
+            ) {
+                onChanged(preferences.copy(enhancedPunctuationEnabled = it))
+            }
+        }
         item { SettingsHeader("Typing") }
         item { SettingsToggle("Autocorrection", preferences.autocorrectionEnabled) { onChanged(preferences.copy(autocorrectionEnabled = it)) } }
         item { SettingsToggle("Swipe typing", preferences.swipeTypingEnabled) { onChanged(preferences.copy(swipeTypingEnabled = it)) } }
@@ -662,10 +677,24 @@ private fun KeyboardSettingsPage(
 }
 
 @Composable
-private fun SettingsToggle(title: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
+private fun SettingsToggle(
+    title: String,
+    checked: Boolean,
+    detail: String? = null,
+    onChecked: (Boolean) -> Unit,
+) {
     Card {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, modifier = Modifier.weight(1f))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title)
+                if (detail != null) {
+                    Text(
+                        detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             Switch(checked = checked, onCheckedChange = onChecked)
         }
     }

@@ -47,4 +47,16 @@ class OnDeviceRecognizerIntentInstrumentationTest {
         assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING))
         assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION))
     }
+
+    @Test fun userOptOutKeepsOnDeviceRecognitionWithoutFormattingExtras() {
+        val intent = onDeviceRecognizerIntent(
+            "en-US",
+            sdkInt = 36,
+            enableFormatting = false,
+        )
+
+        assertTrue(intent.getBooleanExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false))
+        assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING))
+        assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION))
+    }
 }

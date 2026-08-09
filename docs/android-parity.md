@@ -32,7 +32,7 @@ implementation and the listed runtime evidence exist.
 | Keyboard dictation handoff | direct IME on-device speech session | dictate into at least two third-party apps |
 | Start, stop, cancel, partial level/status, error/retry | IME dictation toolbar and recognizer callbacks | device interaction and error-path tests |
 | Finished-text cleanup and contextual spacing | Kotlin port of deterministic transcript polish/insertion rules | unit tests and field insertion check |
-| Apple Intelligence punctuation refinement | API 33+ quality-optimized on-device recognizer formatting, guarded against changed/reordered raw words | intent and faithfulness-policy tests plus device dictation |
+| Apple Intelligence punctuation refinement and opt-out | Persisted API 33+ quality-optimized on-device recognizer formatting, guarded against changed/reordered raw words | preference, intent, and faithfulness-policy tests plus device dictation |
 | Local recent-dictation history/copy | app-private history shared by app and IME | restart persistence and clipboard check |
 | QWERTY letters, shift/caps, delete, space, return | custom responsive IME key surface and `InputConnection` edits | portrait/landscape phone and tablet QA |
 | `123`, `#+=`, Gboard-like punctuation layout | Android symbol pages with configurable return scope | unit tests plus visual QA |
@@ -52,7 +52,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 15, the repository has local automated evidence for:
+As of Android `versionCode` 16, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -112,11 +112,12 @@ As of Android `versionCode` 15, the repository has local automated evidence for:
   API 33 fallback, explicit installed/pending/downloadable model states, and
   generation-gated callbacks so stale support/download work cannot end a new
   dictation session;
-- API 33+ quality-optimized on-device punctuation/capitalization, with the
+- API 33+ quality-optimized on-device punctuation/capitalization, with a
+  persisted user opt-out honored independently by app and IME sessions, the
   documented formatted/raw pair checked by the same word-subsequence
-  faithfulness rule as iOS and a singleton fallback for recognizers that ignore
-  the formatting request;
-- all 68 Android unit tests, all 20 instrumentation tests on an API 36 emulator,
+  faithfulness rule as iOS, and a singleton fallback for recognizers that
+  ignore the formatting request;
+- all 68 Android unit tests, all 21 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with
@@ -140,8 +141,9 @@ from emulator or unit-test results.
 - Android API 33+ exposes native speech formatting rather than a general system
   language-model session. Scribe requests its quality mode only from the
   explicit on-device recognizer and accepts the formatted hypothesis only when
-  it preserves the raw word sequence. API 31–32 and recognizers that ignore the
-  request retain the deterministic transcript polisher.
+  it preserves the raw word sequence. The app exposes the same default-on,
+  persisted opt-out as iOS. API 31–32, an explicit opt-out, and recognizers that
+  ignore the request retain the deterministic transcript polisher.
 - Android does not require the 15-minute iOS background microphone keep-alive.
   Direct capture while the IME is visible is both simpler and more private.
 - Android does not expose the user's full Gboard lexicon to another IME. Scribe

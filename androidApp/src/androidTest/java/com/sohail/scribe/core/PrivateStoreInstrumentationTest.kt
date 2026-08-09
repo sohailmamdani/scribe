@@ -23,6 +23,7 @@ class PrivateStoreInstrumentationTest {
             doubleSpacePeriodEnabled = false,
             autocorrectionEnabled = false,
             swipeTypingEnabled = false,
+            enhancedPunctuationEnabled = false,
         )
         store.keyboard = changed
         assertEquals(changed, ScribePreferences(context).keyboard)
