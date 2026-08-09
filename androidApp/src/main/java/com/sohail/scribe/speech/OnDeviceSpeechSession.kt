@@ -10,6 +10,7 @@ import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import com.sohail.scribe.core.TranscriptPolisher
 import java.util.Locale
 
 enum class SpeechSessionState { IDLE, PREPARING, LISTENING, PROCESSING, COMPLETED, FAILED }
@@ -25,6 +26,41 @@ object OnDeviceModelPolicy {
         pendingLanguages.isNotEmpty() -> OnDeviceModelStatus.PENDING
         downloadableLanguages.isNotEmpty() -> OnDeviceModelStatus.DOWNLOADABLE
         else -> OnDeviceModelStatus.UNKNOWN
+    }
+}
+
+/** Selects Android's formatted hypothesis only when it preserves the raw words. */
+internal object OnDeviceFormattingPolicy {
+    fun bestResult(results: List<String>): String {
+        val formatted = results.getOrNull(0).orEmpty()
+        val raw = results.getOrNull(1).orEmpty()
+        return when {
+            formatted.isBlank() -> raw
+            raw.isBlank() -> formatted
+            TranscriptPolisher.isFaithfulRefinement(formatted, raw) -> formatted
+            else -> raw
+        }
+    }
+}
+
+internal fun onDeviceRecognizerIntent(
+    languageTag: String,
+    sdkInt: Int = Build.VERSION.SDK_INT,
+    enableFormatting: Boolean = true,
+) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+    putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
+    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+    // One recognition result is enough. When API 33 formatting is honored,
+    // Android still returns the documented formatted/raw hypothesis pair.
+    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+    if (enableFormatting && sdkInt >= 33) {
+        putExtra(
+            RecognizerIntent.EXTRA_ENABLE_FORMATTING,
+            RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY,
+        )
+        putExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION, true)
     }
 }
 
@@ -80,7 +116,7 @@ class OnDeviceSpeechSession(
             val activeRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
             recognizer = activeRecognizer
             activeRecognizer.setRecognitionListener(gatedRecognitionListener(token))
-            activeRecognizer.startListening(recognizerIntent(languageTag))
+            activeRecognizer.startListening(onDeviceRecognizerIntent(languageTag))
         } catch (error: RuntimeException) {
             destroyRecognizer(token)
             listener.onStateChanged(SpeechSessionState.FAILED, startFailureMessage(error))
@@ -122,7 +158,7 @@ class OnDeviceSpeechSession(
             val downloadRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
             recognizer = downloadRecognizer
             downloadRecognizer.setRecognitionListener(gatedRecognitionListener(token))
-            val intent = recognizerIntent(languageTag)
+            val intent = onDeviceRecognizerIntent(languageTag, enableFormatting = false)
             if (Build.VERSION.SDK_INT >= 34) {
                 modelStatusListener(OnDeviceModelStatus.DOWNLOADING)
                 listener.onStateChanged(SpeechSessionState.PREPARING, "Requesting the on-device language model…")
@@ -201,7 +237,7 @@ class OnDeviceSpeechSession(
             recognizer = supportRecognizer
             supportRecognizer.setRecognitionListener(gatedRecognitionListener(token))
             supportRecognizer.checkRecognitionSupport(
-                recognizerIntent(languageTag),
+                onDeviceRecognizerIntent(languageTag, enableFormatting = false),
                 appContext.mainExecutor,
                 object : RecognitionSupportCallback {
                     override fun onSupportResult(recognitionSupport: RecognitionSupport) {
@@ -275,17 +311,9 @@ class OnDeviceSpeechSession(
 
     override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
-    private fun recognizerIntent(languageTag: String) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-    }
-
     private fun bestResult(bundle: Bundle?): String = bundle
         ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-        ?.firstOrNull()
+        ?.let(OnDeviceFormattingPolicy::bestResult)
         .orEmpty()
 
     private fun gatedRecognitionListener(token: Long) = object : RecognitionListener {
