@@ -19,6 +19,13 @@ DerivedData/
 .build/
 .swiftpm/
 
+# Android / Gradle
+.gradle/
+androidApp/build/
+local.properties
+*.apk
+*.aab
+
 # macOS
 .DS_Store
 .AppleDouble

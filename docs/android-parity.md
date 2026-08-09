@@ -1,0 +1,70 @@
+# Scribe Android parity plan
+
+This document is the completion contract for the Android port. A green Android
+build is a milestone, not proof of parity. Each row is complete only after the
+implementation and the listed runtime evidence exist.
+
+## Platform architecture
+
+- **Containing app:** a native Kotlin/Jetpack Compose activity owns onboarding,
+  microphone permission, on-device recognizer availability/model download,
+  recent dictations, privacy explanations, and keyboard preferences.
+- **Keyboard:** an `InputMethodService` renders the Scribe key surface and edits
+  the focused field through `InputConnection`.
+- **Dictation:** unlike an iOS keyboard extension, a visible Android IME can use
+  the app UID's granted microphone permission. The keyboard therefore creates
+  Android's on-device `SpeechRecognizer` directly. It never selects the generic
+  recognizer because that implementation may send audio to a server.
+- **Shared state:** app and IME are components of one Android package, so private
+  `SharedPreferences` and app-private history replace the iOS App Group request
+  protocol. No transcript or audio is placed in external storage.
+- **Compatibility floor:** Android 12 / API 31, the first release with the
+  explicit on-device recognizer factory. Devices without an installed on-device
+  recognition service get model/setup guidance, never a silent cloud fallback.
+
+## Parity matrix
+
+| iOS behavior | Android analogue | Proof required |
+| --- | --- | --- |
+| Containing-app model and permission onboarding | Compose setup/status screen, runtime `RECORD_AUDIO`, enabled/default IME checks | UI test plus real-device setup |
+| Large-v3 WhisperKit, offline only | `createOnDeviceSpeechRecognizer`; support check and model download | airplane-mode dictation on supported hardware |
+| Tap-to-dictate in containing app | app-owned on-device speech session | device dictation and local-history check |
+| Keyboard dictation handoff | direct IME on-device speech session | dictate into at least two third-party apps |
+| Start, stop, cancel, partial level/status, error/retry | IME dictation toolbar and recognizer callbacks | device interaction and error-path tests |
+| Finished-text cleanup and contextual spacing | Kotlin port of deterministic transcript polish/insertion rules | unit tests and field insertion check |
+| Local recent-dictation history/copy | app-private history shared by app and IME | restart persistence and clipboard check |
+| QWERTY letters, shift/caps, delete, space, return | custom responsive IME key surface and `InputConnection` edits | portrait/landscape phone and tablet QA |
+| `123`, `#+=`, Gboard-like punctuation layout | Android symbol pages with configurable return scope | unit tests plus visual QA |
+| Long-press/down-flick alternates and key previews | touch-state alternate selection and preview bubble | gesture tests plus device QA |
+| Hold-delete and delete-word behavior | repeating deletion and word-delete gesture/action | unit and device checks |
+| Double-space period and automatic capitalization | context-aware Android editing rules | unit tests across sentence/word fields |
+| Conservative autocorrect, candidates, undo | bundled lexicon, edit-distance ranking, composing/candidate surface | corpus tests and device QA |
+| Word swipe | path decoder using the shared frequency word list | decoder tests and device QA |
+| Space-bar cursor mode | horizontal drag mapped to selection movement | editable-field device QA |
+| Host field traits | `EditorInfo.inputType`/`imeOptions` layouts and action labels | number, phone, email, URL, password, search tests |
+| Globe/input-mode switch | system next-input-method action | multi-keyboard device QA |
+| Haptics, previews, symbol behavior settings | private shared preferences consumed on IME activation | app/IME round-trip tests |
+| VoiceOver/accessibility actions | virtual accessibility nodes and spoken key/alternate names | TalkBack audit |
+| Privacy: no analytics/upload/audio retention | no network permission; only explicit on-device recognizer | manifest audit and offline runtime proof |
+| iPhone/iPad adaptive layout | Android phone/tablet/foldable/landscape sizing | screenshot matrix and layout tests |
+| TestFlight distribution | signed AAB/APK with unique `versionCode`; internal Play track or approved direct-install release path | signed artifact and tester availability |
+
+## Known platform substitutions
+
+- Apple Intelligence punctuation refinement has no universal Android API with
+  an equivalent offline/faithfulness contract. Scribe keeps its deterministic
+  transcript polisher; a future optional Android system-model refinement may be
+  enabled only if it can be proven on-device and guarded by the same
+  word-subsequence rule.
+- Android does not require the 15-minute iOS background microphone keep-alive.
+  Direct capture while the IME is visible is both simpler and more private.
+- Android's system does not expose the user's full Gboard lexicon to another
+  IME. Scribe uses its bundled frequency dictionaries and records accepted or
+  rejected corrections privately.
+
+## Release completion
+
+Android work is not parity-complete until all rows above have authoritative
+evidence, the iOS targets still build and test, the Android app and IME pass unit
+and instrumentation tests, a signed Android artifact has a unique version code,
+and the artifact is available to the intended internal testers.

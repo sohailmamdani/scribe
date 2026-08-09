@@ -1,6 +1,6 @@
 # Scribe
 
-A native macOS and iOS speech-to-text app that runs entirely on your machine.
+A native macOS, iOS, and Android speech-to-text app that runs entirely on your device.
 
 Press a global hotkey, speak, release — your words are transcribed locally and pasted into whatever app is in front of you. No cloud, no account, no upload.
 
@@ -36,6 +36,12 @@ For the iOS app and keyboard:
 - Microphone access in the containing Scribe app.
 - Scribe Keyboard enabled with Full Access. Full Access is used for private App Group communication between the keyboard and Scribe; transcription remains on-device.
 
+For the Android app and keyboard:
+
+- Android 12 or later.
+- An installed Android on-device speech recognition service and language model.
+- Microphone access granted to Scribe and the Scribe input method enabled.
+
 ## iPhone and iPad
 
 The `Scribe iOS` target includes a containing app and an embedded `ScribeKeyboard` extension. From any standard text field, switch to Scribe Keyboard and tap **Dictate**. The keyboard asks iOS to open Scribe, the containing app activates the microphone, and recording continues while you return to the original app. Scribe transcribes and polishes the recording locally and inserts the result at the cursor. On recent iOS versions, you may need to swipe back once after Scribe opens.
@@ -49,6 +55,21 @@ To enable the keyboard:
 3. Choose Scribe, then enable **Allow Full Access**.
 
 The handoff through the containing app is required because iOS does not give custom keyboard extensions direct microphone access. See [the iOS architecture](docs/ios-architecture.md) for implementation details.
+
+## Android
+
+The `androidApp` module contains a native Jetpack Compose setup/dictation app
+and a custom `InputMethodService`. Android allows the visible IME to use the
+app's granted microphone permission, so keyboard dictation runs through the
+explicit on-device `SpeechRecognizer` without opening the containing app or
+keeping a background microphone session alive. Scribe never selects Android's
+generic recognizer and does not declare the internet permission.
+
+Open Scribe once to grant microphone access, enable the Scribe keyboard, and
+select it as the current input method. The containing app includes a test field
+for checking typing and dictation before switching to another app. Android port
+status and the requirement-by-requirement parity evidence are tracked in
+[the Android parity plan](docs/android-parity.md).
 
 ## Install
 
@@ -67,6 +88,15 @@ open Scribe.xcodeproj
 Then ⌘R in Xcode. Swift Package Manager will resolve `argmax-oss-swift` and `Sparkle` on first open.
 
 Choose the `Scribe iOS` scheme to build the iPhone/iPad app and its keyboard extension, or `Scribe` for the original macOS app.
+
+Android builds require Android Studio's JDK and Android SDK 36:
+
+```bash
+./gradlew :androidApp:testDebugUnitTest :androidApp:assembleDebug
+```
+
+The debug APK is written to
+`androidApp/build/outputs/apk/debug/androidApp-debug.apk`.
 
 ## Releasing (maintainer only)
 
