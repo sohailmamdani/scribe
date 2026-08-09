@@ -1072,7 +1072,8 @@ class ScribeKeyboardView(context: Context) : View(context) {
 
     private fun KeyKind.isToolbarControl(): Boolean = when (this) {
         KeyKind.MICROPHONE, KeyKind.CANCEL, KeyKind.UNDO_DICTATION,
-        KeyKind.UNDO_AUTOCORRECTION, KeyKind.SUGGESTION -> true
+        KeyKind.UNDO_AUTOCORRECTION, KeyKind.SUGGESTION,
+        KeyKind.INSERT_RECOVERED_DICTATION, KeyKind.DISCARD_RECOVERED_DICTATION -> true
         else -> false
     }
 

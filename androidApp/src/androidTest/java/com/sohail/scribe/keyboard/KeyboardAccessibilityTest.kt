@@ -346,12 +346,14 @@ class KeyboardAccessibilityTest {
         val listener = RecordingKeyboardListener()
         instrumentation.runOnMainSync {
             val view = measuredKeyboardView(instrumentation.targetContext, listener)
+            val qwertyBounds = virtualKeyBounds(view, "Q, alternate 1")
             view.updateRecoverableDictationAvailability(true)
 
             val labels = virtualKeyLabels(view)
             assertTrue("Insert finished dictation" in labels)
             assertTrue("Discard the finished dictation" in labels)
             assertFalse("Start dictation" in labels)
+            assertEquals(qwertyBounds, virtualKeyBounds(view, "Q, alternate 1"))
             clickVirtualKey(view, "Insert finished dictation")
             assertEquals(1, listener.recoveredInsertions)
 

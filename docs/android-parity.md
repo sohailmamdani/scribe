@@ -53,7 +53,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 18, the repository has local automated evidence for:
+As of Android `versionCode` 19, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -106,7 +106,8 @@ As of Android `versionCode` 18, the repository has local automated evidence for:
   processing result after the original editor disappears, but stores it
   privately for at most 15 minutes and requires an explicit, TalkBack-labelled
   Insert or Discard action; it never auto-inserts across document generations
-  or offers recovery inside a password field;
+  or offers recovery inside a password field, and those temporary toolbar
+  controls cannot change the QWERTY row's touch or accessibility bounds;
 - a shared document-work generation gate for asynchronous swipe decoding and
   correction candidates, invalidated at the earliest input lifecycle boundary
   so work started in one app cannot insert into or update the next app;
@@ -133,13 +134,17 @@ As of Android `versionCode` 18, the repository has local automated evidence for:
   alternate, consecutive `the the` swipes without trailing spaces, and a
   manually shifted `The` swipe;
 - live Chrome verification that a deliberate space-bar drag changes the host
-  selection and inserts the next character before the untouched trailing text.
+  selection and inserts the next character before the untouched trailing text;
+- live version-18 emulator rendering at 1280×800 dp tablet landscape and an
+  841×701 dp unfolded-foldable analogue, with the app, complete four-row IME,
+  alternates, toolbar, and input-mode switch visible without clipping or an
+  extract editor.
 
 The emulator's package-manager low-storage threshold was reduced only for APK
 installation and instrumentation, then restored; no unrelated app data was
 deleted. The remaining release evidence is a physical-device TalkBack audit,
 airplane-mode dictation with audible speech, the complete two-third-party-app
-field matrix, tablet/foldable visual QA, a production-signed Android artifact,
+field matrix, physical tablet/foldable QA, a production-signed Android artifact,
 and Android tester distribution. Those rows remain open rather than inferred
 from emulator or unit-test results.
 
