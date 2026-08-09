@@ -61,6 +61,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -415,6 +417,12 @@ private fun DictationHero(
     onCancel: () -> Unit,
 ) {
     val busy = state == SpeechSessionState.PREPARING || state == SpeechSessionState.PROCESSING
+    val actionLabel = when (state) {
+        SpeechSessionState.LISTENING -> "Stop dictation"
+        SpeechSessionState.PROCESSING -> "Processing dictation"
+        SpeechSessionState.PREPARING -> "Preparing dictation"
+        else -> "Start dictation"
+    }
     Card(shape = RoundedCornerShape(28.dp)) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -424,7 +432,9 @@ private fun DictationHero(
             FilledIconButton(
                 onClick = onToggle,
                 enabled = !busy,
-                modifier = Modifier.size(104.dp),
+                modifier = Modifier.size(104.dp).semantics {
+                    contentDescription = actionLabel
+                },
                 shape = CircleShape,
             ) {
                 when {
@@ -489,7 +499,14 @@ private fun SetupRow(number: String, title: String, complete: Boolean, action: (
         }
         Spacer(Modifier.size(10.dp))
         Text("$number. $title", modifier = Modifier.weight(1f))
-        if (!complete) OutlinedButton(onClick = action) { Text("Set up") }
+        if (!complete) {
+            OutlinedButton(
+                onClick = action,
+                modifier = Modifier.semantics {
+                    contentDescription = "Set up $title"
+                },
+            ) { Text("Set up") }
+        }
     }
 }
 

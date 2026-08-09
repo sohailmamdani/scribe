@@ -343,7 +343,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         val word = KeyboardEditingRules.currentWord(contextBefore()) ?: return
         currentInputConnection?.deleteSurroundingTextInCodePoints(word.codePointCount(0, word.length), 0)
         currentInputConnection?.commitText(candidate.text + " ", 1)
-        correctionLearning.recordAccepted(word, candidate.text)
+        recordAcceptedCorrection(word, candidate.text)
         tapEvidence.clear()
         lastCorrection = AppliedCorrection(word, candidate.text, " ")
         updateAutocorrectionUndoAvailability()
@@ -443,7 +443,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         lastSpaceTapMillis = null
         lastDictationInsertion = insertion
         keyboardView?.updateUndoDictationAvailability(true)
-        historyStore.add(polished)
+        if (fieldProfile.allowsPersonalizedLearning) historyStore.add(polished)
         partialTranscript = polished
         onStateChanged(SpeechSessionState.COMPLETED, "Inserted at the cursor")
         updateAfterDocumentChange()
@@ -496,7 +496,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     private fun acceptPendingCorrection() {
         val correction = lastCorrection ?: return
-        correctionLearning.recordAccepted(correction.original, correction.replacement)
+        recordAcceptedCorrection(correction.original, correction.replacement)
         lastCorrection = null
         updateAutocorrectionUndoAvailability()
     }
@@ -515,7 +515,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             0,
         )
         currentInputConnection?.commitText(correction.original + correction.delimiter, 1)
-        correctionLearning.recordRejected(correction.original, correction.replacement)
+        recordRejectedCorrection(correction.original, correction.replacement)
         lastCorrection = null
         updateAutocorrectionUndoAvailability()
         return true
@@ -523,6 +523,18 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     private fun updateAutocorrectionUndoAvailability() {
         keyboardView?.updateAutocorrectionUndoOriginal(lastCorrection?.original)
+    }
+
+    private fun recordAcceptedCorrection(original: String, replacement: String) {
+        if (fieldProfile.allowsPersonalizedLearning) {
+            correctionLearning.recordAccepted(original, replacement)
+        }
+    }
+
+    private fun recordRejectedCorrection(original: String, replacement: String) {
+        if (fieldProfile.allowsPersonalizedLearning) {
+            correctionLearning.recordRejected(original, replacement)
+        }
     }
 
     private fun reconcileUndoAffordances() {

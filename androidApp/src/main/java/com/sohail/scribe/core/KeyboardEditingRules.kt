@@ -25,7 +25,9 @@ object KeyboardEditingRules {
             ?.takeLastWhile { it.isLetter() || it == '\'' || it == '’' }
             ?.toString()
             .orEmpty()
-        return word.takeIf { it.length >= 2 && it.any(Char::isLetter) }
+        return word.takeIf {
+            it.length >= 2 && it.any(Char::isLetter) && !hasUnexpectedCapitalization(it)
+        }
     }
 
     fun previousWord(contextBefore: CharSequence?): String? {
@@ -98,4 +100,10 @@ object KeyboardEditingRules {
     /** Matches the iOS swipe-word boundary rule without forcing trailing space. */
     fun needsLeadingSpaceAfter(character: Char): Boolean =
         !character.isWhitespace() && character !in "([{\"'“‘@#$/_-–—"
+
+    private fun hasUnexpectedCapitalization(word: String): Boolean {
+        val letters = word.filter(Char::isLetter)
+        if (letters.length <= 1) return false
+        return letters == letters.uppercase() || letters.drop(1).any(Char::isUpperCase)
+    }
 }

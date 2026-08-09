@@ -51,7 +51,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 6, the repository has local automated evidence for:
+As of Android `versionCode` 7, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, email, URL, password, multiline, and search/action behavior;
@@ -79,6 +79,11 @@ As of Android `versionCode` 6, the repository has local automated evidence for:
   are disabled;
 - host selection synchronization that clears stale tap/correction state and
   deletes selected text as a selection rather than deleting before the caret;
+- iOS-matched protection for acronyms and unexpected internal capitals, plus
+  Android's no-personalized-learning editor flag suppressing correction
+  feedback and IME dictation-history persistence;
+- state-specific accessibility labels for the containing app's dictation and
+  setup actions, alongside the keyboard's virtual-key accessibility surface;
 - swipe insertion without a forced trailing space, with punctuation-aware word
   boundaries and manual Shift carried into the decoded word;
 - deliberate 350 ms space-bar cursor activation, plus a punctuation palette
@@ -86,7 +91,7 @@ As of Android `versionCode` 6, the repository has local automated evidence for:
   selected return-to-letters scope;
 - the API 34 model-download progress/success/scheduled/error contract, with an
   API 33 fallback and explicit installed/pending/downloadable model states;
-- unit tests, all 15 Android instrumentation tests on an API 36 emulator,
+- all 50 Android unit tests, all 15 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with

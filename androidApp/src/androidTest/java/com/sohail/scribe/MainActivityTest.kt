@@ -16,6 +16,7 @@ class MainActivityTest {
 
     @Test fun setupAndSettingsFlowsExposeTheParityControls() {
         compose.onNodeWithText("Tap to dictate").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Start dictation").assertIsDisplayed()
         compose.onNodeWithText("Try the keyboard").assertIsDisplayed()
         scrollTo("home-list", "Private by design")
 

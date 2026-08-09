@@ -73,6 +73,16 @@ class KeyboardFieldProfileTest {
         assertTrue(result.allowsDictation)
     }
 
+    @Test fun hostNoPersonalizedLearningFlagDisablesHistoryAndCorrectionLearning() {
+        val result = profile(
+            InputType.TYPE_CLASS_TEXT,
+            EditorInfo.IME_ACTION_NONE or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING,
+        )
+        assertFalse(result.allowsPersonalizedLearning)
+        assertTrue(result.allowsSuggestions)
+        assertTrue(profile(InputType.TYPE_CLASS_TEXT).allowsPersonalizedLearning)
+    }
+
     @Test fun capitalizationFlagsMapWithoutAffectingEmailOrNumericFields() {
         assertEquals(
             KeyboardCapitalization.ALL_CHARACTERS,

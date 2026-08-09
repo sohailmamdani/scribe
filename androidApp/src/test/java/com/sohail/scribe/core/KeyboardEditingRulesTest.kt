@@ -6,6 +6,13 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class KeyboardEditingRulesTest {
+    @Test fun acronymsAndUnexpectedInternalCapsAreNotAutocorrected() {
+        assertEquals(null, KeyboardEditingRules.currentWord("NASA"))
+        assertEquals(null, KeyboardEditingRules.currentWord("iPhone"))
+        assertEquals(null, KeyboardEditingRules.currentWord("McDonald"))
+        assertEquals("Hello", KeyboardEditingRules.currentWord("Hello"))
+    }
+
     @Test fun swipeWordsInsertOnlyTheLeadingBoundaryTheyNeed() {
         assertTrue(KeyboardEditingRules.needsLeadingSpaceAfter('d'))
         assertTrue(KeyboardEditingRules.needsLeadingSpaceAfter(')'))

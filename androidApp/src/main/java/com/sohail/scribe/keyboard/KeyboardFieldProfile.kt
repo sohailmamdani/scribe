@@ -23,6 +23,7 @@ data class KeyboardFieldProfile(
     val sensitive: Boolean = false,
     val allowsSuggestions: Boolean = true,
     val allowsDictation: Boolean = true,
+    val allowsPersonalizedLearning: Boolean = true,
     val allowsShift: Boolean = true,
     val capitalization: KeyboardCapitalization = KeyboardCapitalization.SENTENCES,
     val signedNumber: Boolean = false,
@@ -53,6 +54,8 @@ data class KeyboardFieldProfile(
                 sensitive = sensitive,
                 allowsSuggestions = textLayout && !sensitive && !explicitlyDisablesSuggestions,
                 allowsDictation = !sensitive,
+                allowsPersonalizedLearning =
+                    imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING == 0,
                 allowsShift = layout == KeyboardFieldLayout.TEXT ||
                     layout == KeyboardFieldLayout.EMAIL || layout == KeyboardFieldLayout.URI,
                 capitalization = capitalizationFor(inputType, layout),
