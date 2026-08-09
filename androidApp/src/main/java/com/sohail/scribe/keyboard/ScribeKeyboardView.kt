@@ -32,7 +32,7 @@ interface KeyboardActionListener {
     fun onSpace()
     fun onEnter()
     fun onMoveCursor(characters: Int)
-    fun onSwipe(keys: List<Char>)
+    fun onSwipe(keys: List<Char>, capitalize: Boolean)
     fun onSuggestion(candidate: CorrectionCandidate)
     fun onUndoAutocorrection()
     fun onNextInputMethod()
@@ -126,7 +126,8 @@ class ScribeKeyboardView(context: Context) : View(context) {
             node.hintText = when {
                 key.kind == KeyKind.SPACE -> "Touch and drag to move the cursor"
                 key.id == "period" -> "Long press, then slide for more punctuation"
-                key.alternate != null -> "Long press for ${KeyboardAccessibilityLabels.labelFor("alternate", key.alternate)}"
+                preferences.alternateSymbolsEnabled && key.alternate != null ->
+                    "Long press for ${KeyboardAccessibilityLabels.labelFor("alternate", key.alternate)}"
                 else -> null
             }
             val accessibleBounds = hitRegions[key.id]
@@ -141,7 +142,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
             node.isClickable = true
             node.isEnabled = true
             node.addAction(AccessibilityNodeInfoCompat.ACTION_CLICK)
-            if (key.alternate != null) {
+            if (preferences.alternateSymbolsEnabled && key.alternate != null) {
                 node.isLongClickable = true
                 node.addAction(AccessibilityNodeInfoCompat.ACTION_LONG_CLICK)
             }
@@ -159,7 +160,9 @@ class ScribeKeyboardView(context: Context) : View(context) {
                     sendEventForVirtualView(virtualViewId, AccessibilityEvent.TYPE_VIEW_CLICKED)
                     true
                 }
-                AccessibilityNodeInfoCompat.ACTION_LONG_CLICK -> key.alternate?.let {
+                AccessibilityNodeInfoCompat.ACTION_LONG_CLICK -> key.alternate
+                    ?.takeIf { preferences.alternateSymbolsEnabled }
+                    ?.let {
                     commitAlternate(key)
                     sendEventForVirtualView(virtualViewId, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED)
                     true
@@ -409,7 +412,8 @@ class ScribeKeyboardView(context: Context) : View(context) {
             key.kind == KeyKind.ENTER -> fieldProfile.returnAction.label
             else -> key.label
         }
-        return KeyboardAccessibilityLabels.labelFor(key.id, visible, key.alternate)
+        val alternate = key.alternate.takeIf { preferences.alternateSymbolsEnabled }
+        return KeyboardAccessibilityLabels.labelFor(key.id, visible, alternate)
     }
 
     private fun drawSwipeTrail(canvas: Canvas) {
@@ -509,8 +513,10 @@ class ScribeKeyboardView(context: Context) : View(context) {
 
     private fun moveTouch(x: Float, y: Float) {
         val key = currentKey ?: return
+        val deltaX = x - downX
+        val deltaY = y - downY
         if (key.kind == KeyKind.SPACE) {
-            val steps = ((x - downX) / dp(12f)).toInt()
+            val steps = (deltaX / dp(12f)).toInt()
             val delta = steps - cursorSteps
             if (delta != 0) {
                 listener?.onMoveCursor(delta)
@@ -519,23 +525,36 @@ class ScribeKeyboardView(context: Context) : View(context) {
             }
             return
         }
+        if (key.kind == KeyKind.DELETE) {
+            if (keyAt(x, y)?.id != key.id) {
+                handler.removeCallbacks(deleteRepeatRunnable)
+                currentKey = null
+                invalidate()
+            }
+            return
+        }
         if (punctuationPopupVisible) {
             selectedPunctuation = punctuationAt(x, y, key)
             invalidate()
             return
         }
+        if (KeyboardGestureRules.shouldCancelAlternateHold(deltaX, deltaY)) {
+            handler.removeCallbacks(alternateRunnable)
+        }
         if (alternateArmed) {
             // Once the deliberate long-press has armed an alternate, sliding
             // must stay in that gesture instead of turning into a word swipe.
             alternateSelectionActive = KeyboardGestureRules.remainsInAlternateSelection(
-                deltaX = x - downX,
-                deltaY = y - downY,
+                deltaX = deltaX,
+                deltaY = deltaY,
                 keyHeight = key.rect.height(),
             )
             invalidate()
             return
         }
-        if (preferences.swipeTypingEnabled && key.kind == KeyKind.TEXT && hypot(x - downX, y - downY) >= dp(24f)) {
+        if (preferences.swipeTypingEnabled && key.kind == KeyKind.TEXT &&
+            hypot(deltaX, deltaY) >= dp(KeyboardGestureRules.SWIPE_DISTANCE)
+        ) {
             val hovered = keyAt(x, y)?.takeIf {
                 it.kind == KeyKind.TEXT && it.output?.singleOrNull()?.isLetter() == true
             }
@@ -561,7 +580,10 @@ class ScribeKeyboardView(context: Context) : View(context) {
             punctuationPopupVisible -> listener?.onText(selectedPunctuation ?: ".")
             key.kind == KeyKind.DELETE && deleteRepeated -> Unit
             key.kind == KeyKind.SPACE && cursorSteps != 0 -> Unit
-            isSwiping && swipeKeys.size >= 2 -> listener?.onSwipe(swipeKeys.toList())
+            isSwiping && swipeKeys.size >= 2 -> {
+                listener?.onSwipe(swipeKeys.toList(), capitalize = shift != ShiftState.OFF)
+                if (shift == ShiftState.ONCE) shift = ShiftState.OFF
+            }
             alternateArmed && alternateSelectionActive && key.alternate != null -> commitAlternate(key)
             alternateArmed -> Unit
             key.kind == KeyKind.TEXT -> commitKey(key, downX, downY)
@@ -805,14 +827,14 @@ class ScribeKeyboardView(context: Context) : View(context) {
                 label = if (shift == ShiftState.OFF) output else output.uppercase(),
                 output = output,
                 rect = RectF(left, top, left + keyWidth, top + rowHeight),
-                alternate = ALTERNATES[character],
+                alternate = KeyboardAlternateSymbols.alternateFor(character),
             )
         }
     }
 
     private fun buildSymbolRows(viewWidth: Int, top: Float, rowHeight: Float, rowGap: Float, symbols: Boolean) {
         val layout = if (symbols) SYMBOL_ROWS else NUMBER_ROWS
-        addTextRow(layout[0], viewWidth, top, rowHeight, dp(4f))
+        addTextRow(layout[0], viewWidth, top, rowHeight, dp(4f), allowsAlternates = !symbols)
         addTextRow(layout[1], viewWidth, top + rowHeight + rowGap, rowHeight, dp(4f))
         val thirdTop = top + (rowHeight + rowGap) * 2f
         val sideWidth = dp(52f)
@@ -880,7 +902,14 @@ class ScribeKeyboardView(context: Context) : View(context) {
         )
     }
 
-    private fun addTextRow(values: List<String>, viewWidth: Int, top: Float, rowHeight: Float, inset: Float) {
+    private fun addTextRow(
+        values: List<String>,
+        viewWidth: Int,
+        top: Float,
+        rowHeight: Float,
+        inset: Float,
+        allowsAlternates: Boolean = false,
+    ) {
         val gap = dp(5f)
         val keyWidth = (viewWidth - inset * 2f - gap * (values.size - 1)) / values.size
         values.forEachIndexed { index, value ->
@@ -890,6 +919,11 @@ class ScribeKeyboardView(context: Context) : View(context) {
                 label = value,
                 output = value,
                 rect = RectF(left, top, left + keyWidth, top + rowHeight),
+                alternate = if (allowsAlternates) {
+                    value.singleOrNull()?.let(KeyboardAlternateSymbols::alternateFor)
+                } else {
+                    null
+                },
             )
         }
     }
@@ -964,14 +998,6 @@ class ScribeKeyboardView(context: Context) : View(context) {
     }
 
     companion object {
-        private val ALTERNATES = mapOf(
-            'q' to "1", 'w' to "2", 'e' to "3", 'r' to "4", 't' to "5",
-            'y' to "6", 'u' to "7", 'i' to "8", 'o' to "9", 'p' to "0",
-            'a' to "@", 's' to "#", 'd' to "$", 'f' to "&", 'g' to "*",
-            'h' to "(", 'j' to ")", 'k' to "'", 'l' to "\"",
-            'z' to "%", 'x' to "-", 'c' to "+", 'v' to "=", 'b' to "/",
-            'n' to ";", 'm' to ":",
-        )
         private val NUMBER_ROWS = listOf(
             "1234567890".map(Char::toString),
             listOf("-", "/", ":", ";", "(", ")", "$", "&", "@", "\""),

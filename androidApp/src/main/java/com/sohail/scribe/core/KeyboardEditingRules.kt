@@ -94,4 +94,8 @@ object KeyboardEditingRules {
         onSymbolsPage: Boolean,
     ): Boolean = behavior == SymbolTapBehavior.RETURN_TO_LETTERS &&
         (scope == SymbolTapScope.NUMBERS_AND_SYMBOLS || onSymbolsPage)
+
+    /** Matches the iOS swipe-word boundary rule without forcing trailing space. */
+    fun needsLeadingSpaceAfter(character: Char): Boolean =
+        !character.isWhitespace() && character !in "([{\"'“‘@#$/_-–—"
 }

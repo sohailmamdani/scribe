@@ -71,7 +71,9 @@ uses the same bundled word, bigram, and swipe corpora as the iOS keyboard for
 private context-aware correction and resampled QWERTY-shape gesture decoding.
 Its touch regions tile the visual gaps between keycaps, and accepted automatic
 or manual corrections expose the same one-tap undo affordance as the iOS
-keyboard.
+keyboard. The `123` page carries the same long-press digit alternates as iOS,
+swiped words preserve manual Shift without forcing a trailing space, and host
+selection changes immediately invalidate stale correction state.
 
 Open Scribe once to grant microphone access, enable the Scribe keyboard, and
 select it as the current input method. The containing app includes a test field

@@ -6,6 +6,13 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class KeyboardEditingRulesTest {
+    @Test fun swipeWordsInsertOnlyTheLeadingBoundaryTheyNeed() {
+        assertTrue(KeyboardEditingRules.needsLeadingSpaceAfter('d'))
+        assertTrue(KeyboardEditingRules.needsLeadingSpaceAfter(')'))
+        listOf(' ', '\n', '(', '[', '{', '\"', '\'', '“', '‘', '@', '#', '$', '/', '_', '-', '–', '—')
+            .forEach { assertFalse(KeyboardEditingRules.needsLeadingSpaceAfter(it), "Unexpected space after $it") }
+    }
+
     @Test fun currentWordKeepsApostrophes() {
         assertEquals("isn't", KeyboardEditingRules.currentWord("That isn't"))
         assertEquals(null, KeyboardEditingRules.currentWord("a"))

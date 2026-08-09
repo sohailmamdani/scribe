@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -43,6 +44,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private var partialTranscript = ""
     private var audioLevel = 0f
     private var speechState = SpeechSessionState.IDLE
+    private var selectionStart = -1
+    private var selectionEnd = -1
+    private var localMutationGraceDeadlineMillis = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -82,6 +86,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             inputType = info?.inputType ?: 0,
             imeOptions = info?.imeOptions ?: EditorInfo.IME_ACTION_NONE,
         )
+        selectionStart = info?.initialSelStart ?: -1
+        selectionEnd = info?.initialSelEnd ?: -1
+        markLocalMutation()
         if (!fieldProfile.allowsDictation &&
             (speechState == SpeechSessionState.LISTENING || speechState == SpeechSessionState.PREPARING)
         ) {
@@ -118,6 +125,34 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         super.onFinishInputView(finishingInput)
     }
 
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int,
+    ) {
+        super.onUpdateSelection(
+            oldSelStart,
+            oldSelEnd,
+            newSelStart,
+            newSelEnd,
+            candidatesStart,
+            candidatesEnd,
+        )
+        selectionStart = newSelStart
+        selectionEnd = newSelEnd
+        if (SystemClock.uptimeMillis() > localMutationGraceDeadlineMillis) {
+            // The host, rather than this keyboard, moved the caret. Any tap
+            // geometry and double-space timing now describe the wrong word.
+            tapEvidence.clear()
+            lastSpaceTapMillis = null
+        }
+        reconcileUndoAffordances()
+        updateAfterDocumentChange()
+    }
+
     override fun onDestroy() {
         speechSession.destroy()
         worker.shutdownNow()
@@ -126,9 +161,16 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onText(text: String, isLetter: Boolean, evidence: KeyboardTapEvidence?) {
         if (text.isEmpty()) return
+        markLocalMutation()
         clearDictationUndo()
-        acceptPendingCorrection()
+        if (hasActiveSelection()) {
+            lastCorrection = null
+            updateAutocorrectionUndoAvailability()
+        } else {
+            acceptPendingCorrection()
+        }
         lastSpaceTapMillis = null
+        if (hasActiveSelection()) tapEvidence.clear()
         if (isLetter) tapEvidence += evidence else tapEvidence.clear()
         if (!isLetter && text.singleOrNull() in listOf('.', ',', '?', '!', ';', ':')) {
             lastCorrection = applyAutomaticCorrection(text)
@@ -143,6 +185,20 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     override fun onDelete() {
         clearDictationUndo()
         lastSpaceTapMillis = null
+        if (hasActiveSelection()) {
+            markLocalMutation()
+            tapEvidence.clear()
+            lastCorrection = null
+            updateAutocorrectionUndoAvailability()
+            if (KeyboardSelectionEditing.deleteSelection(currentInputConnection, selectionStart, selectionEnd)) {
+                val collapsed = minOf(selectionStart, selectionEnd)
+                selectionStart = collapsed
+                selectionEnd = collapsed
+            }
+            updateAfterDocumentChange()
+            return
+        }
+        markLocalMutation()
         if (undoLastAutocorrection()) {
             tapEvidence.clear()
         } else {
@@ -156,8 +212,21 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     override fun onDeleteWord() {
         clearDictationUndo()
         tapEvidence.clear()
-        acceptPendingCorrection()
         lastSpaceTapMillis = null
+        if (hasActiveSelection()) {
+            markLocalMutation()
+            lastCorrection = null
+            updateAutocorrectionUndoAvailability()
+            if (KeyboardSelectionEditing.deleteSelection(currentInputConnection, selectionStart, selectionEnd)) {
+                val collapsed = minOf(selectionStart, selectionEnd)
+                selectionStart = collapsed
+                selectionEnd = collapsed
+            }
+            updateAfterDocumentChange()
+            return
+        }
+        acceptPendingCorrection()
+        markLocalMutation()
         val count = KeyboardEditingRules.deleteWordCodePointCount(contextBefore())
         currentInputConnection?.deleteSurroundingTextInCodePoints(count, 0)
         lastCorrection = null
@@ -166,7 +235,18 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onSpace() {
         clearDictationUndo()
+        if (hasActiveSelection()) {
+            markLocalMutation()
+            lastCorrection = null
+            updateAutocorrectionUndoAvailability()
+            tapEvidence.clear()
+            currentInputConnection?.commitText(" ", 1)
+            lastSpaceTapMillis = System.currentTimeMillis()
+            updateAfterDocumentChange()
+            return
+        }
         acceptPendingCorrection()
+        markLocalMutation()
         val before = contextBefore()
         val now = System.currentTimeMillis()
         val elapsed = lastSpaceTapMillis?.let { now - it }
@@ -194,6 +274,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         acceptPendingCorrection()
         tapEvidence.clear()
         lastSpaceTapMillis = null
+        markLocalMutation()
         val options = currentInputEditorInfo?.imeOptions ?: EditorInfo.IME_ACTION_NONE
         val action = options and EditorInfo.IME_MASK_ACTION
         if (fieldProfile.returnAction != KeyboardReturnAction.RETURN &&
@@ -212,6 +293,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         acceptPendingCorrection()
         tapEvidence.clear()
         lastSpaceTapMillis = null
+        markLocalMutation()
         val keyCode = if (characters < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
         repeat(kotlin.math.abs(characters)) {
             currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
@@ -221,7 +303,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         refreshSuggestions()
     }
 
-    override fun onSwipe(keys: List<Char>) {
+    override fun onSwipe(keys: List<Char>, capitalize: Boolean) {
         clearDictationUndo()
         acceptPendingCorrection()
         tapEvidence.clear()
@@ -232,16 +314,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             val decoded = decoder.decode(keys)
             mainHandler.post {
                 if (generation != suggestionGeneration.get() || decoded == null) return@post
-                val before = contextBefore()
-                if (!before.isNullOrEmpty() && !before.last().isWhitespace()) {
-                    currentInputConnection?.commitText(" ", 1)
-                }
-                val word = if (automaticShiftRequired()) {
-                    decoded.replaceFirstChar(Char::uppercase)
-                } else {
-                    decoded
-                }
-                currentInputConnection?.commitText("$word ", 1)
+                markLocalMutation()
+                val insertion = KeyboardSwipeInsertion.text(decoded, contextBefore(), capitalize)
+                currentInputConnection?.commitText(insertion, 1)
                 lastCorrection = null
                 updateAfterDocumentChange()
             }
@@ -249,9 +324,11 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onSuggestion(candidate: CorrectionCandidate) {
+        if (hasActiveSelection()) return
         clearDictationUndo()
         acceptPendingCorrection()
         lastSpaceTapMillis = null
+        markLocalMutation()
         val word = KeyboardEditingRules.currentWord(contextBefore()) ?: return
         currentInputConnection?.deleteSurroundingTextInCodePoints(word.codePointCount(0, word.length), 0)
         currentInputConnection?.commitText(candidate.text + " ", 1)
@@ -266,6 +343,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         clearDictationUndo()
         lastSpaceTapMillis = null
         tapEvidence.clear()
+        markLocalMutation()
         undoLastAutocorrection()
         updateAfterDocumentChange()
     }
@@ -310,6 +388,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         val insertion = lastDictationInsertion ?: return
         val before = currentInputConnection?.getTextBeforeCursor(insertion.length, 0)?.toString()
         if (before?.endsWith(insertion) == true) {
+            markLocalMutation()
             currentInputConnection?.deleteSurroundingTextInCodePoints(
                 insertion.codePointCount(0, insertion.length),
                 0,
@@ -347,6 +426,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             return
         }
         val insertion = TranscriptPolisher.textForInsertion(polished, contextBefore(), contextAfter())
+        markLocalMutation()
         currentInputConnection?.commitText(insertion, 1)
         tapEvidence.clear()
         lastSpaceTapMillis = null
@@ -365,7 +445,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     private fun applyAutomaticCorrection(delimiter: String): AppliedCorrection? {
-        if (!preferences.autocorrectionEnabled || !fieldProfile.allowsSuggestions) return null
+        if (hasActiveSelection() || !preferences.autocorrectionEnabled || !fieldProfile.allowsSuggestions) {
+            return null
+        }
         val original = KeyboardEditingRules.currentWord(contextBefore()) ?: return null
         val candidate = currentSuggestions.firstOrNull { it.automaticallyReplaces }
             ?.takeIf { suggestionWord.equals(original, ignoreCase = true) }
@@ -432,8 +514,27 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         keyboardView?.updateAutocorrectionUndoOriginal(lastCorrection?.original)
     }
 
+    private fun reconcileUndoAffordances() {
+        if (hasActiveSelection()) {
+            lastCorrection = null
+            clearDictationUndo()
+            updateAutocorrectionUndoAvailability()
+            return
+        }
+        val before = contextBefore()
+        lastCorrection?.let { correction ->
+            if (before?.endsWith(correction.replacement + correction.delimiter) != true) {
+                lastCorrection = null
+                updateAutocorrectionUndoAvailability()
+            }
+        }
+        lastDictationInsertion?.let { insertion ->
+            if (before?.endsWith(insertion) != true) clearDictationUndo()
+        }
+    }
+
     private fun refreshSuggestions() {
-        if (!fieldProfile.allowsSuggestions || !preferences.autocorrectionEnabled) {
+        if (hasActiveSelection() || !fieldProfile.allowsSuggestions || !preferences.autocorrectionEnabled) {
             suggestionGeneration.incrementAndGet()
             currentSuggestions = emptyList()
             suggestionWord = null
@@ -478,9 +579,20 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private fun contextBefore() = currentInputConnection?.getTextBeforeCursor(256, 0)
     private fun contextAfter() = currentInputConnection?.getTextAfterCursor(64, 0)
 
+    private fun hasActiveSelection(): Boolean =
+        KeyboardSelectionEditing.hasSelection(selectionStart, selectionEnd)
+
+    private fun markLocalMutation() {
+        localMutationGraceDeadlineMillis = SystemClock.uptimeMillis() + LOCAL_MUTATION_GRACE_MILLIS
+    }
+
     private data class AppliedCorrection(
         val original: String,
         val replacement: String,
         val delimiter: String,
     )
+
+    companion object {
+        private const val LOCAL_MUTATION_GRACE_MILLIS = 250L
+    }
 }

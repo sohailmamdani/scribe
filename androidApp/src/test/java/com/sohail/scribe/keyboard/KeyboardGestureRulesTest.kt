@@ -5,6 +5,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class KeyboardGestureRulesTest {
+    @Test fun alternateHoldCancelsAfterTheSameTravelAsIos() {
+        assertFalse(KeyboardGestureRules.shouldCancelAlternateHold(0f, 12f))
+        assertTrue(KeyboardGestureRules.shouldCancelAlternateHold(0f, 12.1f))
+        assertTrue(KeyboardGestureRules.shouldCancelAlternateHold(9f, 9f))
+    }
+
     @Test fun alternatePaletteAllowsDeliberateNearbyMovement() {
         assertTrue(KeyboardGestureRules.remainsInAlternateSelection(0f, 0f, 45f))
         assertTrue(KeyboardGestureRules.remainsInAlternateSelection(20f, 40f, 45f))

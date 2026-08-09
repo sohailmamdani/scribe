@@ -2,8 +2,11 @@ package com.sohail.scribe.keyboard
 
 import android.text.InputType
 import android.view.View
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.BaseInputConnection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.sohail.scribe.core.KeyboardPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
@@ -11,6 +14,59 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class KeyboardAccessibilityTest {
+    @Test fun disablingAlternatesAlsoRemovesTheTalkBackAction() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val view = ScribeKeyboardView(instrumentation.targetContext)
+            view.updatePreferences(KeyboardPreferences(alternateSymbolsEnabled = false))
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(1_080, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY),
+            )
+            view.layout(0, 0, 1_080, 900)
+
+            val provider = view.accessibilityNodeProvider!!
+            assertEquals("Q", provider.createAccessibilityNodeInfo(1)?.contentDescription?.toString())
+            assertEquals(false, provider.performAction(1, AccessibilityNodeInfo.ACTION_LONG_CLICK, null))
+        }
+    }
+
+    @Test fun selectedTextIsDeletedAsASelectionInsteadOfBeforeTheCaret() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val connection = BaseInputConnection(View(instrumentation.targetContext), true)
+            connection.commitText("hello world", 1)
+            connection.setSelection(0, 5)
+
+            assertEquals(true, KeyboardSelectionEditing.deleteSelection(connection, 0, 5))
+            assertEquals(" world", connection.editable.toString())
+        }
+    }
+
+    @Test fun numbersPageExposesTheSameDigitAlternatesAsIos() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val view = ScribeKeyboardView(instrumentation.targetContext)
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(1_080, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY),
+            )
+            view.layout(0, 0, 1_080, 900)
+
+            val provider = view.accessibilityNodeProvider!!
+            val modeIndex = (0 until 64).first { index ->
+                provider.createAccessibilityNodeInfo(index)?.contentDescription?.toString() ==
+                    "Numbers and symbols"
+            }
+            provider.performAction(modeIndex, AccessibilityNodeInfo.ACTION_CLICK, null)
+
+            assertEquals(
+                "1, alternate Exclamation mark",
+                provider.createAccessibilityNodeInfo(1)?.contentDescription?.toString(),
+            )
+        }
+    }
+
     @Test fun talkBackProviderExposesVirtualKeysAndHidesMicrophoneForPasswords() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {

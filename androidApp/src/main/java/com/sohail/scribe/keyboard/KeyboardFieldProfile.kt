@@ -111,24 +111,17 @@ object KeyboardAccessibilityLabels {
             "period" -> "Period"
             else -> punctuationName(visibleLabel) ?: visibleLabel
         }
-        return if (alternate == null) base else "$base, alternate ${punctuationName(alternate) ?: alternate}"
+        return if (alternate == null) {
+            base
+        } else {
+            "$base, alternate ${punctuationName(alternate) ?: alternate}"
+        }
     }
 
-    private fun punctuationName(value: String): String? = when (value) {
+    private fun punctuationName(value: String): String? = KeyboardAlternateSymbols.spokenName(value) ?: when (value) {
         "." -> "Period"
         "," -> "Comma"
         "?" -> "Question mark"
-        "!" -> "Exclamation mark"
-        "@" -> "At sign"
-        "#" -> "Number sign"
-        "+" -> "Plus"
-        "-" -> "Hyphen"
-        "/" -> "Slash"
-        "*" -> "Asterisk"
-        "'" -> "Apostrophe"
-        "\"" -> "Quotation mark"
-        ":" -> "Colon"
-        ";" -> "Semicolon"
         else -> null
     }
 }
