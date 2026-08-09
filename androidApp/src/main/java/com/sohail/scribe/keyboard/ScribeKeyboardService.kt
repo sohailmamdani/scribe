@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, SpeechSessionListener {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
-    private val suggestionGeneration = AtomicInteger()
+    private val documentWorkGate = KeyboardDocumentWorkGate()
     private val userDictionaryGeneration = AtomicInteger()
     private val dictationInputGate = KeyboardDictationInputGate()
     private lateinit var preferencesStore: ScribePreferences
@@ -88,6 +88,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
+        documentWorkGate.invalidate()
         dictationInputGate.beginInput()
         cancelInFlightDictation()
         speechState = SpeechSessionState.IDLE
@@ -132,12 +133,14 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onFinishInputView(finishingInput: Boolean) {
         acceptPendingCorrection()
+        documentWorkGate.invalidate()
         dictationInputGate.invalidateInput()
         cancelInFlightDictation()
         super.onFinishInputView(finishingInput)
     }
 
     override fun onFinishInput() {
+        documentWorkGate.invalidate()
         dictationInputGate.invalidateInput()
         cancelInFlightDictation()
         super.onFinishInput()
@@ -172,6 +175,8 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onDestroy() {
+        documentWorkGate.invalidate()
+        dictationInputGate.invalidateInput()
         speechSession.destroy()
         worker.shutdownNow()
         super.onDestroy()
@@ -338,11 +343,11 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         tapEvidence.clear()
         lastSpaceTapMillis = null
         val decoder = swipeDecoder ?: return
-        val generation = suggestionGeneration.incrementAndGet()
+        val generation = documentWorkGate.begin()
         worker.execute {
             val decoded = decoder.decode(keys)
             mainHandler.post {
-                if (generation != suggestionGeneration.get() || decoded == null) return@post
+                if (!documentWorkGate.accepts(generation) || decoded == null) return@post
                 markLocalMutation()
                 val insertion = KeyboardSwipeInsertion.text(decoded, contextBefore(), capitalize)
                 currentInputConnection?.commitText(insertion, 1)
@@ -596,7 +601,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     private fun refreshSuggestions() {
         if (hasActiveSelection() || !fieldProfile.allowsSuggestions || !preferences.autocorrectionEnabled) {
-            suggestionGeneration.incrementAndGet()
+            documentWorkGate.invalidate()
             currentSuggestions = emptyList()
             suggestionWord = null
             keyboardView?.updateSuggestions(emptyList())
@@ -605,13 +610,13 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         val word = KeyboardEditingRules.currentWord(contextBefore())
         val loadedLexicon = lexicon
         if (word == null || loadedLexicon == null) {
-            suggestionGeneration.incrementAndGet()
+            documentWorkGate.invalidate()
             currentSuggestions = emptyList()
             suggestionWord = word
             keyboardView?.updateSuggestions(emptyList())
             return
         }
-        val generation = suggestionGeneration.incrementAndGet()
+        val generation = documentWorkGate.begin()
         val contextSnapshot = contextBefore()?.toString()
         val evidenceSnapshot = tapEvidence.takeLast(word.length).let { suffix ->
             List<KeyboardTapEvidence?>(word.length - suffix.size) { null } + suffix
@@ -630,7 +635,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                 evidence = evidenceSnapshot,
             )
             mainHandler.post {
-                if (generation != suggestionGeneration.get()) return@post
+                if (!documentWorkGate.accepts(generation)) return@post
                 val liveWord = KeyboardEditingRules.currentWord(contextBefore())
                 if (!liveWord.equals(word, ignoreCase = true)) return@post
                 suggestionWord = word

@@ -51,7 +51,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 13, the repository has local automated evidence for:
+As of Android `versionCode` 14, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -99,6 +99,9 @@ As of Android `versionCode` 13, the repository has local automated evidence for:
   recognition is processing and rejection of late partial, level, or final
   callbacks after the keyboard moves to another app, field, or password input,
   with the prior document's transient transcript/status cleared on transition;
+- a shared document-work generation gate for asynchronous swipe decoding and
+  correction candidates, invalidated at the earliest input lifecycle boundary
+  so work started in one app cannot insert into or update the next app;
 - swipe insertion without a forced trailing space, with punctuation-aware word
   boundaries and manual Shift carried into the decoded word;
 - deliberate 350 ms space-bar cursor activation, plus a punctuation palette
@@ -108,7 +111,7 @@ As of Android `versionCode` 13, the repository has local automated evidence for:
   API 33 fallback, explicit installed/pending/downloadable model states, and
   generation-gated callbacks so stale support/download work cannot end a new
   dictation session;
-- all 63 Android unit tests, all 17 instrumentation tests on an API 36 emulator,
+- all 65 Android unit tests, all 17 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with
