@@ -294,10 +294,21 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         tapEvidence.clear()
         lastSpaceTapMillis = null
         markLocalMutation()
-        val keyCode = if (characters < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
-        repeat(kotlin.math.abs(characters)) {
-            currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-            currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+        val movedSelection = KeyboardCursorEditing.moveCollapsedSelection(
+            connection = currentInputConnection,
+            selectionStart = selectionStart,
+            selectionEnd = selectionEnd,
+            characters = characters,
+        )
+        if (movedSelection != null) {
+            selectionStart = movedSelection
+            selectionEnd = movedSelection
+        } else {
+            val keyCode = if (characters < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+            repeat(kotlin.math.abs(characters)) {
+                currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+                currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+            }
         }
         lastCorrection = null
         refreshSuggestions()

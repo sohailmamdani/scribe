@@ -1,10 +1,15 @@
 package com.sohail.scribe.keyboard
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class KeyboardGestureRulesTest {
+    @Test fun spaceCursorUsesTheSameDeliberateHoldAsIos() {
+        assertEquals(350L, KeyboardGestureRules.SPACE_CURSOR_HOLD_MILLIS)
+    }
+
     @Test fun alternateHoldCancelsAfterTheSameTravelAsIos() {
         assertFalse(KeyboardGestureRules.shouldCancelAlternateHold(0f, 12f))
         assertTrue(KeyboardGestureRules.shouldCancelAlternateHold(0f, 12.1f))

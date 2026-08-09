@@ -73,7 +73,9 @@ Its touch regions tile the visual gaps between keycaps, and accepted automatic
 or manual corrections expose the same one-tap undo affordance as the iOS
 keyboard. The `123` page carries the same long-press digit alternates as iOS,
 swiped words preserve manual Shift without forcing a trailing space, and host
-selection changes immediately invalidate stale correction state.
+selection changes immediately invalidate stale correction state. Space-bar
+cursor movement now requires the same deliberate hold as iOS, and the period
+palette honors the shared alternate-symbol delay and page-return preferences.
 
 Open Scribe once to grant microphone access, enable the Scribe keyboard, and
 select it as the current input method. The containing app includes a test field

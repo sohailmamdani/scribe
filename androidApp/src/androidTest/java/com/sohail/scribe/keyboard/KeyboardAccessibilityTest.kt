@@ -1,14 +1,19 @@
 package com.sohail.scribe.keyboard
 
 import android.text.InputType
+import android.graphics.Rect
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.BaseInputConnection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.sohail.scribe.core.KeyboardPreferences
+import com.sohail.scribe.core.SymbolTapBehavior
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -28,7 +33,89 @@ class KeyboardAccessibilityTest {
             val provider = view.accessibilityNodeProvider!!
             assertEquals("Q", provider.createAccessibilityNodeInfo(1)?.contentDescription?.toString())
             assertEquals(false, provider.performAction(1, AccessibilityNodeInfo.ACTION_LONG_CLICK, null))
+            val periodIndex = (0 until 64).first { index ->
+                provider.createAccessibilityNodeInfo(index)?.contentDescription?.toString() == "Period"
+            }
+            assertEquals(null, provider.createAccessibilityNodeInfo(periodIndex)?.hintText)
         }
+    }
+
+    @Test fun quickSpaceDragTypesSpaceInsteadOfMovingTheCursor() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val listener = RecordingKeyboardListener()
+        instrumentation.runOnMainSync {
+            val view = measuredKeyboardView(instrumentation.targetContext, listener)
+            val bounds = virtualKeyBounds(view, "Space")
+            val downTime = SystemClock.uptimeMillis()
+            view.onTouchEvent(MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, bounds.exactCenterX(), bounds.exactCenterY(), 0))
+            view.onTouchEvent(MotionEvent.obtain(downTime, downTime + 40, MotionEvent.ACTION_MOVE, bounds.exactCenterX() + 48, bounds.exactCenterY(), 0))
+            view.onTouchEvent(MotionEvent.obtain(downTime, downTime + 80, MotionEvent.ACTION_UP, bounds.exactCenterX() + 48, bounds.exactCenterY(), 0))
+        }
+
+        assertEquals(1, listener.spaces)
+        assertEquals(0, listener.cursorMovement)
+    }
+
+    @Test fun heldSpaceDragMovesTheCursorWithoutTypingSpace() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val listener = RecordingKeyboardListener()
+        lateinit var view: ScribeKeyboardView
+        lateinit var bounds: Rect
+        val downTime = SystemClock.uptimeMillis()
+        instrumentation.runOnMainSync {
+            view = measuredKeyboardView(instrumentation.targetContext, listener)
+            bounds = virtualKeyBounds(view, "Space")
+            view.onTouchEvent(MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, bounds.exactCenterX(), bounds.exactCenterY(), 0))
+        }
+        Thread.sleep(KeyboardGestureRules.SPACE_CURSOR_HOLD_MILLIS + 150L)
+        instrumentation.runOnMainSync {
+            val eventTime = SystemClock.uptimeMillis()
+            view.onTouchEvent(MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, bounds.exactCenterX() + 48, bounds.exactCenterY(), 0))
+            view.onTouchEvent(MotionEvent.obtain(downTime, eventTime + 20, MotionEvent.ACTION_UP, bounds.exactCenterX() + 48, bounds.exactCenterY(), 0))
+        }
+
+        assertEquals(0, listener.spaces)
+        assertTrue(listener.cursorMovement > 0)
+    }
+
+    @Test fun punctuationHoldUsesPreferencesAndReturnsToLetters() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val listener = RecordingKeyboardListener()
+        lateinit var view: ScribeKeyboardView
+        lateinit var bounds: Rect
+        val downTime = SystemClock.uptimeMillis()
+        instrumentation.runOnMainSync {
+            view = measuredKeyboardView(
+                instrumentation.targetContext,
+                listener,
+                KeyboardPreferences(
+                    alternateHoldDelayMillis = 250,
+                    symbolTapBehavior = SymbolTapBehavior.RETURN_TO_LETTERS,
+                ),
+            )
+            val provider = view.accessibilityNodeProvider!!
+            val modeIndex = (0 until 64).first { index ->
+                provider.createAccessibilityNodeInfo(index)?.contentDescription?.toString() ==
+                    "Numbers and symbols"
+            }
+            provider.performAction(modeIndex, AccessibilityNodeInfo.ACTION_CLICK, null)
+            bounds = virtualKeyBounds(view, "Period")
+            view.onTouchEvent(MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, bounds.exactCenterX(), bounds.exactCenterY(), 0))
+        }
+        Thread.sleep(400L)
+        instrumentation.runOnMainSync {
+            val eventTime = SystemClock.uptimeMillis()
+            view.onTouchEvent(MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, bounds.exactCenterX(), bounds.exactCenterY(), 0))
+            assertTrue(
+                view.accessibilityNodeProvider
+                    ?.createAccessibilityNodeInfo(1)
+                    ?.contentDescription
+                    ?.toString()
+                    ?.startsWith("Q") == true,
+            )
+        }
+
+        assertEquals(listOf("."), listener.texts)
     }
 
     @Test fun selectedTextIsDeletedAsASelectionInsteadOfBeforeTheCaret() {
@@ -40,6 +127,19 @@ class KeyboardAccessibilityTest {
 
             assertEquals(true, KeyboardSelectionEditing.deleteSelection(connection, 0, 5))
             assertEquals(" world", connection.editable.toString())
+        }
+    }
+
+    @Test fun cursorMovementUsesHostSelectionAndKeepsEmojiWhole() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val connection = BaseInputConnection(View(instrumentation.targetContext), true)
+            connection.commitText("a😀bc", 1)
+            connection.setSelection(5, 5)
+
+            assertEquals(3, KeyboardCursorEditing.moveCollapsedSelection(connection, 5, 5, -2))
+            connection.commitText("X", 1)
+            assertEquals("a😀Xbc", connection.editable.toString())
         }
     }
 
@@ -148,5 +248,51 @@ class KeyboardAccessibilityTest {
                     ?.toString(),
             )
         }
+    }
+
+    private fun measuredKeyboardView(
+        context: android.content.Context,
+        actionListener: KeyboardActionListener,
+        preferences: KeyboardPreferences = KeyboardPreferences(),
+    ) = ScribeKeyboardView(context).apply {
+        listener = actionListener
+        updatePreferences(preferences)
+        measure(
+            View.MeasureSpec.makeMeasureSpec(1_080, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY),
+        )
+        layout(0, 0, 1_080, 900)
+    }
+
+    @Suppress("DEPRECATION") // The virtual-key provider exposes parent-relative test bounds.
+    private fun virtualKeyBounds(view: ScribeKeyboardView, label: String): Rect {
+        val provider = view.accessibilityNodeProvider!!
+        val index = (0 until 64).first { candidate ->
+            provider.createAccessibilityNodeInfo(candidate)?.contentDescription?.toString() == label
+        }
+        return Rect().also { provider.createAccessibilityNodeInfo(index)!!.getBoundsInParent(it) }
+    }
+
+    private class RecordingKeyboardListener : KeyboardActionListener {
+        val texts = mutableListOf<String>()
+        var spaces = 0
+        var cursorMovement = 0
+
+        override fun onText(text: String, isLetter: Boolean, evidence: KeyboardTapEvidence?) {
+            texts += text
+        }
+
+        override fun onDelete() = Unit
+        override fun onDeleteWord() = Unit
+        override fun onSpace() { spaces += 1 }
+        override fun onEnter() = Unit
+        override fun onMoveCursor(characters: Int) { cursorMovement += characters }
+        override fun onSwipe(keys: List<Char>, capitalize: Boolean) = Unit
+        override fun onSuggestion(candidate: CorrectionCandidate) = Unit
+        override fun onUndoAutocorrection() = Unit
+        override fun onNextInputMethod() = Unit
+        override fun onToggleDictation() = Unit
+        override fun onCancelDictation() = Unit
+        override fun onUndoDictation() = Unit
     }
 }

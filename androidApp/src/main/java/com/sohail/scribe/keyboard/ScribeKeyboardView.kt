@@ -101,6 +101,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private var deleteRepeated = false
     private var deleteRepeatCount = 0
     private var isSwiping = false
+    private var spaceCursorMode = false
     private var cursorSteps = 0
     private var punctuationPopupVisible = false
     private var selectedPunctuation: String? = null
@@ -124,8 +125,9 @@ class ScribeKeyboardView(context: Context) : View(context) {
             node.className = "android.widget.Button"
             node.contentDescription = accessibleLabel(key)
             node.hintText = when {
-                key.kind == KeyKind.SPACE -> "Touch and drag to move the cursor"
-                key.id == "period" -> "Long press, then slide for more punctuation"
+                key.kind == KeyKind.SPACE -> "Touch and hold, then drag to move the cursor"
+                key.id == "period" && preferences.alternateSymbolsEnabled ->
+                    "Long press, then slide for more punctuation"
                 preferences.alternateSymbolsEnabled && key.alternate != null ->
                     "Long press for ${KeyboardAccessibilityLabels.labelFor("alternate", key.alternate)}"
                 else -> null
@@ -201,9 +203,17 @@ class ScribeKeyboardView(context: Context) : View(context) {
         }
     }
     private val punctuationRunnable = Runnable {
-        if (currentKey?.id == "period") {
+        if (preferences.alternateSymbolsEnabled && currentKey?.id == "period") {
             punctuationPopupVisible = true
             selectedPunctuation = "."
+            feedback(HapticFeedbackConstants.LONG_PRESS)
+            invalidate()
+        }
+    }
+    private val spaceCursorRunnable = Runnable {
+        if (currentKey?.kind == KeyKind.SPACE) {
+            spaceCursorMode = true
+            cursorSteps = 0
             feedback(HapticFeedbackConstants.LONG_PRESS)
             invalidate()
         }
@@ -403,6 +413,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         key.kind == KeyKind.NEXT_INPUT -> "◉"
         key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.LISTENING -> "■"
         key.kind == KeyKind.MICROPHONE -> "●"
+        key.kind == KeyKind.SPACE && spaceCursorMode -> "Move cursor"
         else -> key.label
     }
 
@@ -495,6 +506,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         deleteRepeated = false
         deleteRepeatCount = 0
         isSwiping = false
+        spaceCursorMode = false
         swipePoints.clear()
         swipeKeys.clear()
         punctuationPopupVisible = false
@@ -502,8 +514,13 @@ class ScribeKeyboardView(context: Context) : View(context) {
         val key = currentKey ?: return
         feedback(HapticFeedbackConstants.KEYBOARD_TAP)
         if (key.kind == KeyKind.DELETE) handler.postDelayed(deleteRepeatRunnable, 450L)
+        if (key.kind == KeyKind.SPACE) {
+            handler.postDelayed(spaceCursorRunnable, KeyboardGestureRules.SPACE_CURSOR_HOLD_MILLIS)
+        }
         if (key.alternate != null) handler.postDelayed(alternateRunnable, preferences.alternateHoldDelayMillis.toLong())
-        if (key.id == "period") handler.postDelayed(punctuationRunnable, 380L)
+        if (key.id == "period" && preferences.alternateSymbolsEnabled) {
+            handler.postDelayed(punctuationRunnable, preferences.alternateHoldDelayMillis.toLong())
+        }
         if (key.kind == KeyKind.TEXT && key.output?.singleOrNull()?.isLetter() == true) {
             swipePoints += x to y
             swipeKeys += key.output.lowercase().single()
@@ -516,6 +533,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         val deltaX = x - downX
         val deltaY = y - downY
         if (key.kind == KeyKind.SPACE) {
+            if (!spaceCursorMode) return
             val steps = (deltaX / dp(12f)).toInt()
             val delta = steps - cursorSteps
             if (delta != 0) {
@@ -574,12 +592,13 @@ class ScribeKeyboardView(context: Context) : View(context) {
         handler.removeCallbacks(alternateRunnable)
         handler.removeCallbacks(deleteRepeatRunnable)
         handler.removeCallbacks(punctuationRunnable)
+        handler.removeCallbacks(spaceCursorRunnable)
         val key = currentKey
         when {
             key == null -> Unit
-            punctuationPopupVisible -> listener?.onText(selectedPunctuation ?: ".")
+            punctuationPopupVisible -> commitPunctuation(selectedPunctuation ?: ".")
             key.kind == KeyKind.DELETE && deleteRepeated -> Unit
-            key.kind == KeyKind.SPACE && cursorSteps != 0 -> Unit
+            key.kind == KeyKind.SPACE && spaceCursorMode -> Unit
             isSwiping && swipeKeys.size >= 2 -> {
                 listener?.onSwipe(swipeKeys.toList(), capitalize = shift != ShiftState.OFF)
                 if (shift == ShiftState.ONCE) shift = ShiftState.OFF
@@ -597,17 +616,33 @@ class ScribeKeyboardView(context: Context) : View(context) {
         handler.removeCallbacks(alternateRunnable)
         handler.removeCallbacks(deleteRepeatRunnable)
         handler.removeCallbacks(punctuationRunnable)
+        handler.removeCallbacks(spaceCursorRunnable)
         currentKey = null
         alternateArmed = false
         alternateSelectionActive = false
         deleteRepeated = false
         isSwiping = false
+        spaceCursorMode = false
         cursorSteps = 0
         punctuationPopupVisible = false
         selectedPunctuation = null
         swipePoints.clear()
         swipeKeys.clear()
         invalidate()
+    }
+
+    private fun commitPunctuation(text: String) {
+        playClick()
+        listener?.onText(text)
+        if (page != KeyboardPage.LETTERS && KeyboardEditingRules.shouldReturnToLetters(
+                preferences.symbolTapBehavior,
+                preferences.symbolTapScope,
+                page == KeyboardPage.SYMBOLS,
+            )
+        ) {
+            page = KeyboardPage.LETTERS
+            rebuildKeys(width, height)
+        }
     }
 
     private fun commitKey(key: KeySpec, touchX: Float? = null, touchY: Float? = null) {

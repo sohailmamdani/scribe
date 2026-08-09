@@ -5,6 +5,7 @@ import kotlin.math.abs
 object KeyboardGestureRules {
     const val PREVIEW_DISTANCE = 12f
     const val SWIPE_DISTANCE = 24f
+    const val SPACE_CURSOR_HOLD_MILLIS = 350L
 
     fun shouldCancelAlternateHold(deltaX: Float, deltaY: Float): Boolean =
         kotlin.math.hypot(deltaX, deltaY) > PREVIEW_DISTANCE
