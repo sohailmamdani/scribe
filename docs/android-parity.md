@@ -51,7 +51,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 9, the repository has local automated evidence for:
+As of Android `versionCode` 10, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -84,6 +84,9 @@ As of Android `versionCode` 9, the repository has local automated evidence for:
 - iOS-matched protection for acronyms and unexpected internal capitals, plus
   Android's no-personalized-learning editor flag suppressing correction
   feedback and IME dictation-history persistence;
+- locale-scoped Android Personal Dictionary words and shortcuts, loaded
+  read-only by the active IME, protected from replacement, and ranked alongside
+  bundled correction candidates without persisting a second copy;
 - state-specific accessibility labels for the containing app's dictation and
   setup actions, alongside the keyboard's virtual-key accessibility surface;
 - swipe insertion without a forced trailing space, with punctuation-aware word
@@ -95,7 +98,7 @@ As of Android `versionCode` 9, the repository has local automated evidence for:
   API 33 fallback, explicit installed/pending/downloadable model states, and
   generation-gated callbacks so stale support/download work cannot end a new
   dictation session;
-- all 53 Android unit tests, all 16 instrumentation tests on an API 36 emulator,
+- all 55 Android unit tests, all 16 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with
@@ -123,8 +126,9 @@ from emulator or unit-test results.
   word-subsequence rule.
 - Android does not require the 15-minute iOS background microphone keep-alive.
   Direct capture while the IME is visible is both simpler and more private.
-- Android's system does not expose the user's full Gboard lexicon to another
-  IME. Scribe uses its bundled frequency dictionaries and records accepted or
+- Android does not expose the user's full Gboard lexicon to another IME. Scribe
+  reads the platform Personal Dictionary while active, uses its bundled
+  frequency dictionaries for the wider vocabulary, and records accepted or
   rejected corrections privately.
 
 ## Release completion

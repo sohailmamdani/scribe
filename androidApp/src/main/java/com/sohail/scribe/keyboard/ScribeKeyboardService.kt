@@ -9,6 +9,7 @@ import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
 import com.sohail.scribe.core.DictationHistoryStore
 import com.sohail.scribe.core.KeyboardEditingRules
@@ -18,6 +19,7 @@ import com.sohail.scribe.core.TranscriptPolisher
 import com.sohail.scribe.speech.OnDeviceSpeechSession
 import com.sohail.scribe.speech.SpeechSessionListener
 import com.sohail.scribe.speech.SpeechSessionState
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -25,15 +27,18 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private val mainHandler = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val suggestionGeneration = AtomicInteger()
+    private val userDictionaryGeneration = AtomicInteger()
     private lateinit var preferencesStore: ScribePreferences
     private lateinit var historyStore: DictationHistoryStore
     private lateinit var correctionLearning: KeyboardCorrectionLearningStore
+    private lateinit var userDictionary: AndroidUserDictionary
     private lateinit var speechSession: OnDeviceSpeechSession
     private var keyboardView: ScribeKeyboardView? = null
     private var preferences = KeyboardPreferences()
     private var lexicon: KeyboardLexicon? = null
     private var swipeDecoder: SwipeWordDecoder? = null
     private var currentSuggestions: List<CorrectionCandidate> = emptyList()
+    private var userDictionarySnapshot = AndroidUserDictionarySnapshot()
     private var suggestionWord: String? = null
     private var fieldProfile = KeyboardFieldProfile()
     private var lastCorrection: AppliedCorrection? = null
@@ -53,6 +58,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         preferencesStore = ScribePreferences(this)
         historyStore = DictationHistoryStore(this)
         correctionLearning = KeyboardCorrectionLearningStore(this)
+        userDictionary = AndroidUserDictionary(this)
         speechSession = OnDeviceSpeechSession(this, this)
         worker.execute {
             val loadedLexicon = KeyboardLexicon(this)
@@ -115,6 +121,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         keyboardView?.updateAutocorrectionUndoOriginal(null)
         updateAutomaticShift()
         refreshSuggestions()
+        refreshUserDictionary(info?.hintLocales?.get(0)?.toLanguageTag())
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -578,13 +585,16 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         val evidenceSnapshot = tapEvidence.takeLast(word.length).let { suffix ->
             List<KeyboardTapEvidence?>(word.length - suffix.size) { null } + suffix
         }
-        val protectedSnapshot = correctionLearning.protectedWordsSnapshot()
+        val protectedSnapshot = correctionLearning.protectedWordsSnapshot() +
+            userDictionarySnapshot.protectedWords
+        val userCandidateSnapshot = userDictionarySnapshot.candidateFrequencies
         val acceptedSnapshot = correctionLearning.acceptedCountsSnapshot()
         worker.execute {
             val candidates = loadedLexicon.corrections(
                 original = word,
                 contextBefore = contextSnapshot,
                 protectedWords = protectedSnapshot,
+                userCandidateFrequencies = userCandidateSnapshot,
                 acceptedCounts = acceptedSnapshot,
                 evidence = evidenceSnapshot,
             )
@@ -595,6 +605,25 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                 suggestionWord = word
                 currentSuggestions = candidates
                 keyboardView?.updateSuggestions(candidates)
+            }
+        }
+    }
+
+    private fun refreshUserDictionary(languageTagHint: String?) {
+        val generation = userDictionaryGeneration.incrementAndGet()
+        val subtypeLanguageTag = getSystemService(InputMethodManager::class.java)
+            .currentInputMethodSubtype
+            ?.languageTag
+        val languageTag = subtypeLanguageTag.orEmpty()
+            .ifBlank { languageTagHint.orEmpty() }
+            .ifBlank { "en-US" }
+        val activeLocale = Locale.forLanguageTag(languageTag)
+        worker.execute {
+            val snapshot = userDictionary.snapshot(activeLocale)
+            mainHandler.post {
+                if (generation != userDictionaryGeneration.get()) return@post
+                userDictionarySnapshot = snapshot
+                refreshSuggestions()
             }
         }
     }

@@ -34,6 +34,7 @@ class KeyboardLexicon(context: Context) {
         original: String,
         contextBefore: CharSequence? = null,
         protectedWords: Set<String> = emptySet(),
+        userCandidateFrequencies: Map<String, Long> = emptyMap(),
         acceptedCounts: Map<String, Int> = emptyMap(),
         evidence: List<KeyboardTapEvidence?> = emptyList(),
         limit: Int = 3,
@@ -54,16 +55,23 @@ class KeyboardLexicon(context: Context) {
             source.length >= 4 -> 2
             else -> 1
         }
+        val userEntries = userCandidateFrequencies.mapNotNull { (word, frequency) ->
+            val normalized = word.lowercase()
+            normalized.takeIf {
+                it.length >= 2 && it.all { character -> character.isLetter() || character == '\'' }
+            }?.let { Entry(it, frequency.coerceAtLeast(1L), letterMask(it)) }
+        }
         val completions = if (source.length >= 3) {
-            entries.asSequence()
+            (userEntries.asSequence().sortedByDescending(Entry::frequency) + entries.asSequence())
                 .filter { it.word.length > source.length && it.word.startsWith(source) }
+                .distinctBy(Entry::word)
                 .take(limit)
                 .map { CorrectionCandidate(matchCapitalization(it.word, original), false, true) }
                 .toList()
         } else {
             emptyList()
         }
-        if (source in exactWords) {
+        if (source in exactWords || source in userCandidateFrequencies) {
             return (listOfNotNull(preferredContraction) + completions)
                 .distinctBy { it.text.lowercase() }
                 .take(limit)
@@ -73,13 +81,16 @@ class KeyboardLexicon(context: Context) {
         val sourceMask = letterMask(source)
         val possibleFirstLetters = firstLetterNeighbors(source.first())
 
-        val ranked = ((source.length - maximumDistance).coerceAtLeast(1)..(source.length + maximumDistance))
-            .asSequence()
-            .flatMap { length ->
-                possibleFirstLetters.asSequence().flatMap { first ->
-                    entriesByBucket[length to first].orEmpty().asSequence()
+        val candidateEntries = userEntries.asSequence() +
+            ((source.length - maximumDistance).coerceAtLeast(1)..(source.length + maximumDistance))
+                .asSequence()
+                .flatMap { length ->
+                    possibleFirstLetters.asSequence().flatMap { first ->
+                        entriesByBucket[length to first].orEmpty().asSequence()
+                    }
                 }
-            }
+        val ranked = candidateEntries
+            .distinctBy(Entry::word)
             .filter { entry ->
                 val missingFromCandidate = Integer.bitCount(sourceMask and entry.letterMask.inv())
                 val missingFromSource = Integer.bitCount(entry.letterMask and sourceMask.inv())

@@ -38,6 +38,13 @@ class KeyboardCorpusInstrumentationTest {
         val protected = lexicon.corrections("teh", protectedWords = setOf("teh"))
         assertFalse(protected.any(CorrectionCandidate::automaticallyReplaces))
 
+        val userDictionaryCandidate = lexicon.corrections(
+            "sohal",
+            userCandidateFrequencies = mapOf("sohail" to 20_000_200L),
+        )
+        assertEquals("sohail", userDictionaryCandidate.firstOrNull()?.text?.lowercase())
+        assertTrue(userDictionaryCandidate.first().automaticallyReplaces)
+
         val swipe = SwipeWordDecoder(context).decode(listOf('h', 'e', 'l', 'l', 'o'))
         assertEquals("hello", swipe)
     }
