@@ -90,6 +90,38 @@ class KeyboardAccessibilityTest {
         assertEquals(0, listener.cursorMovement)
     }
 
+    @Test fun deleteCommitsOnTouchDownWithoutRepeatingOnRelease() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val listener = RecordingKeyboardListener()
+        instrumentation.runOnMainSync {
+            val view = measuredKeyboardView(instrumentation.targetContext, listener)
+            val bounds = virtualKeyBounds(view, "Delete")
+            val downTime = SystemClock.uptimeMillis()
+            view.onTouchEvent(
+                MotionEvent.obtain(
+                    downTime,
+                    downTime,
+                    MotionEvent.ACTION_DOWN,
+                    bounds.exactCenterX(),
+                    bounds.exactCenterY(),
+                    0,
+                ),
+            )
+            assertEquals(1, listener.deletes)
+            view.onTouchEvent(
+                MotionEvent.obtain(
+                    downTime,
+                    downTime + 80,
+                    MotionEvent.ACTION_UP,
+                    bounds.exactCenterX(),
+                    bounds.exactCenterY(),
+                    0,
+                ),
+            )
+            assertEquals(1, listener.deletes)
+        }
+    }
+
     @Test fun heldSpaceDragMovesTheCursorWithoutTypingSpace() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val listener = RecordingKeyboardListener()
@@ -404,6 +436,7 @@ class KeyboardAccessibilityTest {
     private class RecordingKeyboardListener : KeyboardActionListener {
         val texts = mutableListOf<String>()
         var spaces = 0
+        var deletes = 0
         var cursorMovement = 0
         var dictationToggles = 0
         var recoveredInsertions = 0
@@ -413,7 +446,7 @@ class KeyboardAccessibilityTest {
             texts += text
         }
 
-        override fun onDelete() = Unit
+        override fun onDelete() { deletes += 1 }
         override fun onDeleteWord() = Unit
         override fun onSpace() { spaces += 1 }
         override fun onEnter() = Unit

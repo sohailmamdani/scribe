@@ -103,7 +103,6 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private var downY = 0f
     private var alternateArmed = false
     private var alternateSelectionActive = false
-    private var deleteRepeated = false
     private var deleteRepeatCount = 0
     private var isSwiping = false
     private var spaceCursorMode = false
@@ -191,7 +190,6 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private val deleteRepeatRunnable = object : Runnable {
         override fun run() {
             if (currentKey?.kind != KeyKind.DELETE) return
-            deleteRepeated = true
             if (deleteRepeatCount < 18) {
                 listener?.onDelete()
                 deleteRepeatCount += 1
@@ -523,7 +521,6 @@ class ScribeKeyboardView(context: Context) : View(context) {
         cursorSteps = 0
         alternateArmed = false
         alternateSelectionActive = false
-        deleteRepeated = false
         deleteRepeatCount = 0
         isSwiping = false
         spaceCursorMode = false
@@ -533,7 +530,12 @@ class ScribeKeyboardView(context: Context) : View(context) {
         selectedPunctuation = null
         val key = currentKey ?: return
         feedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        if (key.kind == KeyKind.DELETE) handler.postDelayed(deleteRepeatRunnable, 450L)
+        if (key.kind == KeyKind.DELETE) {
+            // Match iOS and native keyboard feel: Backspace mutates on touch-down,
+            // then the repeater begins after the deliberate hold interval.
+            listener?.onDelete()
+            handler.postDelayed(deleteRepeatRunnable, 450L)
+        }
         if (key.kind == KeyKind.SPACE) {
             handler.postDelayed(spaceCursorRunnable, KeyboardGestureRules.SPACE_CURSOR_HOLD_MILLIS)
         }
@@ -617,7 +619,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         when {
             key == null -> Unit
             punctuationPopupVisible -> commitPunctuation(selectedPunctuation ?: ".")
-            key.kind == KeyKind.DELETE && deleteRepeated -> Unit
+            key.kind == KeyKind.DELETE -> Unit
             key.kind == KeyKind.SPACE && spaceCursorMode -> Unit
             isSwiping && swipeKeys.size >= 2 -> {
                 listener?.onSwipe(swipeKeys.toList(), capitalize = shift != ShiftState.OFF)
@@ -640,7 +642,6 @@ class ScribeKeyboardView(context: Context) : View(context) {
         currentKey = null
         alternateArmed = false
         alternateSelectionActive = false
-        deleteRepeated = false
         isSwiping = false
         spaceCursorMode = false
         cursorSteps = 0

@@ -53,7 +53,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 17, the repository has local automated evidence for:
+As of Android `versionCode` 18, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -64,7 +64,8 @@ As of Android `versionCode` 17, the repository has local automated evidence for:
 - TalkBack virtual button nodes for every rendered key, spoken punctuation and
   alternate names, click actions, and long-click alternate actions;
 - guarded undo of the last dictation, plus hold-delete acceleration from
-  characters to whole words using Unicode code-point deletion;
+  characters to whole words using Unicode code-point deletion, with the first
+  Backspace committed on touch-down like iOS instead of delayed until release;
 - the exact 236,859-row iOS bigram corpus, context/frequency/tap-distance
   correction ranking, unambiguous contractions, and private accept/reject
   learning (the packaged corpus matches the source SHA-256);
@@ -123,7 +124,7 @@ As of Android `versionCode` 17, the repository has local automated evidence for:
   documented formatted/raw pair checked by the same word-subsequence
   faithfulness rule as iOS, and a singleton fallback for recognizers that
   ignore the formatting request;
-- all 69 Android unit tests, all 23 instrumentation tests on an API 36 emulator,
+- all 69 Android unit tests, all 24 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with
