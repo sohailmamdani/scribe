@@ -65,6 +65,11 @@ explicit on-device `SpeechRecognizer` without opening the containing app or
 keeping a background microphone session alive. Scribe never selects Android's
 generic recognizer and does not declare the internet permission.
 
+The Android IME adapts to text, email, URL, numeric, phone, password, and editor
+action traits; exposes every custom-drawn key as a TalkBack virtual button; and
+uses the same bundled word, bigram, and swipe corpora as the iOS keyboard for
+private context-aware correction and gesture decoding.
+
 Open Scribe once to grant microphone access, enable the Scribe keyboard, and
 select it as the current input method. The containing app includes a test field
 for checking typing and dictation before switching to another app. Android port

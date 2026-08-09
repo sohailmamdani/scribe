@@ -12,7 +12,7 @@ android {
         applicationId = "com.sohail.scribe"
         minSdk = 31
         targetSdk = 36
-        versionCode = 2
+        versionCode = 3
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -41,7 +41,12 @@ android {
 
 val generateScribeAssets by tasks.registering(Copy::class) {
     from(rootProject.file("ScribeKeyboard")) {
-        include("AutocorrectWords.txt", "SwipeWords.txt", "AutocorrectData-LICENSE.txt")
+        include(
+            "AutocorrectWords.txt",
+            "AutocorrectBigrams.txt",
+            "SwipeWords.txt",
+            "AutocorrectData-LICENSE.txt",
+        )
     }
     into(layout.buildDirectory.dir("generated/scribeAssets"))
 }
@@ -72,5 +77,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

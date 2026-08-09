@@ -26,7 +26,7 @@ import com.sohail.scribe.speech.SpeechSessionState
 import kotlin.math.hypot
 
 interface KeyboardActionListener {
-    fun onText(text: String, isLetter: Boolean = false)
+    fun onText(text: String, isLetter: Boolean = false, evidence: KeyboardTapEvidence? = null)
     fun onDelete()
     fun onDeleteWord()
     fun onSpace()
@@ -106,6 +106,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
             keys.indices.forEach(virtualViewIds::add)
         }
 
+        @Suppress("DEPRECATION") // ExploreByTouchHelper virtual children require parent-relative bounds.
         override fun onPopulateNodeForVirtualView(
             virtualViewId: Int,
             node: AccessibilityNodeInfoCompat,
@@ -113,6 +114,12 @@ class ScribeKeyboardView(context: Context) : View(context) {
             val key = keys.getOrNull(virtualViewId) ?: return
             node.className = "android.widget.Button"
             node.contentDescription = accessibleLabel(key)
+            node.hintText = when {
+                key.kind == KeyKind.SPACE -> "Touch and drag to move the cursor"
+                key.id == "period" -> "Long press, then slide for more punctuation"
+                key.alternate != null -> "Long press for ${KeyboardAccessibilityLabels.labelFor("alternate", key.alternate)}"
+                else -> null
+            }
             node.setBoundsInParent(
                 Rect(key.rect.left.toInt(), key.rect.top.toInt(), key.rect.right.toInt(), key.rect.bottom.toInt()),
             )
@@ -483,6 +490,12 @@ class ScribeKeyboardView(context: Context) : View(context) {
             invalidate()
             return
         }
+        if (alternateArmed) {
+            // Once the deliberate long-press has armed an alternate, sliding
+            // must stay in that gesture instead of turning into a word swipe.
+            invalidate()
+            return
+        }
         if (preferences.swipeTypingEnabled && key.kind == KeyKind.TEXT && hypot(x - downX, y - downY) >= dp(24f)) {
             val hovered = keys.lastOrNull {
                 it.rect.contains(x, y) && it.kind == KeyKind.TEXT && it.output?.singleOrNull()?.isLetter() == true
@@ -511,7 +524,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
             key.kind == KeyKind.SPACE && cursorSteps != 0 -> Unit
             isSwiping && swipeKeys.size >= 2 -> listener?.onSwipe(swipeKeys.toList())
             alternateArmed && key.alternate != null -> listener?.onText(key.alternate)
-            key.rect.contains(x, y) || key.kind == KeyKind.SPACE -> commitKey(key)
+            key.rect.contains(x, y) || key.kind == KeyKind.SPACE -> commitKey(key, x, y)
         }
         performClick()
         cancelTouch()
@@ -533,13 +546,22 @@ class ScribeKeyboardView(context: Context) : View(context) {
         invalidate()
     }
 
-    private fun commitKey(key: KeySpec) {
+    private fun commitKey(key: KeySpec, touchX: Float? = null, touchY: Float? = null) {
         playClick()
         when (key.kind) {
             KeyKind.TEXT -> {
                 val output = key.output.orEmpty()
                 val isLetter = output.singleOrNull()?.isLetter() == true
-                listener?.onText(if (isLetter && shift != ShiftState.OFF) output.uppercase() else output, isLetter)
+                val evidence = if (isLetter && touchX != null && touchY != null) {
+                    tapEvidence(output.lowercase().single(), touchX, touchY)
+                } else {
+                    null
+                }
+                listener?.onText(
+                    if (isLetter && shift != ShiftState.OFF) output.uppercase() else output,
+                    isLetter,
+                    evidence,
+                )
                 if (isLetter && shift == ShiftState.ONCE) shift = ShiftState.OFF
                 if (!isLetter && page != KeyboardPage.LETTERS && KeyboardEditingRules.shouldReturnToLetters(
                         preferences.symbolTapBehavior,
@@ -562,6 +584,16 @@ class ScribeKeyboardView(context: Context) : View(context) {
         }
         rebuildKeys(width, height)
         invalidate()
+    }
+
+    private fun tapEvidence(character: Char, touchX: Float, touchY: Float): KeyboardTapEvidence {
+        val distances = keys.asSequence().mapNotNull { key ->
+            val candidate = key.output?.lowercase()?.singleOrNull()?.takeIf(Char::isLetter) ?: return@mapNotNull null
+            val horizontal = (touchX - key.rect.centerX()) / key.rect.width().coerceAtLeast(1f)
+            val vertical = (touchY - key.rect.centerY()) / key.rect.height().coerceAtLeast(1f)
+            candidate to hypot(horizontal, vertical).toDouble()
+        }.toMap()
+        return KeyboardTapEvidence(character, distances)
     }
 
     private fun toggleShift() {

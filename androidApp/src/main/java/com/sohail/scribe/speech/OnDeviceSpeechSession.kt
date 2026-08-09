@@ -4,12 +4,29 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.speech.ModelDownloadListener
 import android.speech.RecognitionListener
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import java.util.Locale
 
 enum class SpeechSessionState { IDLE, PREPARING, LISTENING, PROCESSING, COMPLETED, FAILED }
+enum class OnDeviceModelStatus { UNAVAILABLE, CHECKING, READY, DOWNLOADABLE, PENDING, DOWNLOADING, UNKNOWN }
+
+object OnDeviceModelPolicy {
+    fun status(
+        installedLanguages: List<String>,
+        pendingLanguages: List<String>,
+        downloadableLanguages: List<String>,
+    ): OnDeviceModelStatus = when {
+        installedLanguages.isNotEmpty() -> OnDeviceModelStatus.READY
+        pendingLanguages.isNotEmpty() -> OnDeviceModelStatus.PENDING
+        downloadableLanguages.isNotEmpty() -> OnDeviceModelStatus.DOWNLOADABLE
+        else -> OnDeviceModelStatus.UNKNOWN
+    }
+}
 
 interface SpeechSessionListener {
     fun onStateChanged(state: SpeechSessionState, message: String) = Unit
@@ -21,6 +38,7 @@ interface SpeechSessionListener {
 class OnDeviceSpeechSession(
     context: Context,
     private val listener: SpeechSessionListener,
+    private val modelStatusListener: (OnDeviceModelStatus) -> Unit = {},
 ) : RecognitionListener {
     private val appContext = context.applicationContext
     private var recognizer: SpeechRecognizer? = null
@@ -64,12 +82,94 @@ class OnDeviceSpeechSession(
         checkMainThread()
         if (Build.VERSION.SDK_INT < 33 || !isAvailable) return false
         destroyRecognizer()
-        recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also {
+        val downloadRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also {
             it.setRecognitionListener(this)
-            it.triggerModelDownload(recognizerIntent(languageTag))
         }
-        listener.onStateChanged(SpeechSessionState.PREPARING, "Requested the on-device language model.")
+        recognizer = downloadRecognizer
+        val intent = recognizerIntent(languageTag)
+        if (Build.VERSION.SDK_INT >= 34) {
+            modelStatusListener(OnDeviceModelStatus.DOWNLOADING)
+            listener.onStateChanged(SpeechSessionState.PREPARING, "Requesting the on-device language model…")
+            downloadRecognizer.triggerModelDownload(
+                intent,
+                appContext.mainExecutor,
+                object : ModelDownloadListener {
+                    override fun onProgress(completedPercent: Int) {
+                        modelStatusListener(OnDeviceModelStatus.DOWNLOADING)
+                        listener.onStateChanged(
+                            SpeechSessionState.PREPARING,
+                            "Downloading the on-device language model… ${completedPercent.coerceIn(0, 100)}%",
+                        )
+                    }
+
+                    override fun onSuccess() {
+                        destroyRecognizer()
+                        modelStatusListener(OnDeviceModelStatus.READY)
+                        listener.onStateChanged(SpeechSessionState.IDLE, "On-device language model ready")
+                    }
+
+                    override fun onScheduled() {
+                        destroyRecognizer()
+                        modelStatusListener(OnDeviceModelStatus.PENDING)
+                        listener.onStateChanged(
+                            SpeechSessionState.IDLE,
+                            "On-device model download scheduled by Android",
+                        )
+                    }
+
+                    override fun onError(error: Int) {
+                        destroyRecognizer()
+                        modelStatusListener(OnDeviceModelStatus.UNKNOWN)
+                        listener.onStateChanged(SpeechSessionState.FAILED, errorMessage(error))
+                    }
+                },
+            )
+        } else {
+            downloadRecognizer.triggerModelDownload(intent)
+            modelStatusListener(OnDeviceModelStatus.PENDING)
+            listener.onStateChanged(
+                SpeechSessionState.IDLE,
+                "On-device model download requested in Android",
+            )
+        }
         return true
+    }
+
+    fun checkModelSupport(languageTag: String = Locale.getDefault().toLanguageTag()) {
+        checkMainThread()
+        if (!isAvailable) {
+            modelStatusListener(OnDeviceModelStatus.UNAVAILABLE)
+            return
+        }
+        if (Build.VERSION.SDK_INT < 33) {
+            modelStatusListener(OnDeviceModelStatus.UNKNOWN)
+            return
+        }
+        destroyRecognizer()
+        modelStatusListener(OnDeviceModelStatus.CHECKING)
+        val supportRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
+        recognizer = supportRecognizer
+        supportRecognizer.setRecognitionListener(this)
+        supportRecognizer.checkRecognitionSupport(
+            recognizerIntent(languageTag),
+            appContext.mainExecutor,
+            object : RecognitionSupportCallback {
+                override fun onSupportResult(recognitionSupport: RecognitionSupport) {
+                    val status = OnDeviceModelPolicy.status(
+                        recognitionSupport.installedOnDeviceLanguages,
+                        recognitionSupport.pendingOnDeviceLanguages,
+                        recognitionSupport.supportedOnDeviceLanguages,
+                    )
+                    destroyRecognizer()
+                    modelStatusListener(status)
+                }
+
+                override fun onError(error: Int) {
+                    destroyRecognizer()
+                    modelStatusListener(OnDeviceModelStatus.UNKNOWN)
+                }
+            },
+        )
     }
 
     fun destroy() {
@@ -148,6 +248,10 @@ class OnDeviceSpeechSession(
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Allow microphone access in Scribe first."
         SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "This language is not supported on device."
         SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "Download the on-device language model in Scribe."
+        SpeechRecognizer.ERROR_CANNOT_LISTEN_TO_DOWNLOAD_EVENTS ->
+            "Android accepted the model request but cannot report download progress."
+        SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT ->
+            "Android could not verify on-device recognition support."
         SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
             "The installed on-device recognizer was unavailable. No audio was uploaded."
         SpeechRecognizer.ERROR_NO_MATCH -> "No speech was recognized. Try again."

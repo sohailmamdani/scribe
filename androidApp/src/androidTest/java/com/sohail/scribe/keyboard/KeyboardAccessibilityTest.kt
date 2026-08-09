@@ -57,4 +57,19 @@ class KeyboardAccessibilityTest {
             assertEquals("1", provider.createAccessibilityNodeInfo(1)?.contentDescription.toString())
         }
     }
+
+    @Test fun correctionLearningPersistsAcceptsAndRejectionsPrivately() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("scribe.autocorrection.learning", 0).edit().clear().commit()
+        val first = KeyboardCorrectionLearningStore(context)
+        first.recordAccepted("teh", "the")
+        first.recordRejected("wrod", "word")
+
+        val reloaded = KeyboardCorrectionLearningStore(context)
+        assertEquals(
+            1,
+            reloaded.acceptedCountsSnapshot()[KeyboardCorrectionRanking.pairKey("teh", "the")],
+        )
+        assertEquals(true, "wrod" in reloaded.protectedWordsSnapshot())
+    }
 }

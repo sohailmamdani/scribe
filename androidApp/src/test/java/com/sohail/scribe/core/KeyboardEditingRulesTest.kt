@@ -12,6 +12,18 @@ class KeyboardEditingRulesTest {
         assertEquals(null, KeyboardEditingRules.currentWord("done "))
     }
 
+    @Test fun previousWordSkipsCurrentWordAndDelimiters() {
+        assertEquals("hello", KeyboardEditingRules.previousWord("hello brave"))
+        assertEquals("don't", KeyboardEditingRules.previousWord("don't  worry"))
+        assertEquals(null, KeyboardEditingRules.previousWord("single"))
+    }
+
+    @Test fun onlyUnambiguousContractionsAreRestored() {
+        assertEquals("can't", KeyboardEditingRules.preferredContraction("cant"))
+        assertEquals("I'm", KeyboardEditingRules.preferredContraction("IM"))
+        assertEquals(null, KeyboardEditingRules.preferredContraction("well"))
+    }
+
     @Test fun sentenceCapitalizationUsesNearbyContext() {
         assertTrue(KeyboardEditingRules.shouldCapitalize(null))
         assertTrue(KeyboardEditingRules.shouldCapitalize("Hello! "))
@@ -25,9 +37,11 @@ class KeyboardEditingRulesTest {
     }
 
     @Test fun doubleSpaceRequiresWordLikePredecessor() {
-        assertTrue(KeyboardEditingRules.shouldReplaceDoubleSpace("hello "))
-        assertFalse(KeyboardEditingRules.shouldReplaceDoubleSpace("hello"))
-        assertFalse(KeyboardEditingRules.shouldReplaceDoubleSpace("( "))
+        assertTrue(KeyboardEditingRules.shouldReplaceDoubleSpace("hello ", 400))
+        assertFalse(KeyboardEditingRules.shouldReplaceDoubleSpace("hello ", 551))
+        assertFalse(KeyboardEditingRules.shouldReplaceDoubleSpace("hello", 100))
+        assertFalse(KeyboardEditingRules.shouldReplaceDoubleSpace("( ", 100))
+        assertFalse(KeyboardEditingRules.shouldReplaceDoubleSpace("hello "))
     }
 
     @Test fun wordDeleteConsumesTrailingWhitespaceThenOneWordInCodePoints() {

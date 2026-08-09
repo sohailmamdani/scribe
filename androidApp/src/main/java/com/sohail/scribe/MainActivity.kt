@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
-import android.speech.SpeechRecognizer
 import android.text.format.DateUtils
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
@@ -74,6 +73,7 @@ import com.sohail.scribe.core.SymbolTapBehavior
 import com.sohail.scribe.core.SymbolTapScope
 import com.sohail.scribe.core.TranscriptPolisher
 import com.sohail.scribe.speech.OnDeviceSpeechSession
+import com.sohail.scribe.speech.OnDeviceModelStatus
 import com.sohail.scribe.speech.SpeechSessionListener
 import com.sohail.scribe.speech.SpeechSessionState
 
@@ -91,13 +91,13 @@ class MainActivity : ComponentActivity(), SpeechSessionListener {
     private var hasMicrophonePermission by mutableStateOf(false)
     private var keyboardEnabled by mutableStateOf(false)
     private var keyboardSelected by mutableStateOf(false)
-    private var onDeviceRecognizerAvailable by mutableStateOf(false)
+    private var onDeviceModelStatus by mutableStateOf(OnDeviceModelStatus.CHECKING)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         historyStore = DictationHistoryStore(this)
         preferenceStore = ScribePreferences(this)
-        speechSession = OnDeviceSpeechSession(this, this)
+        speechSession = OnDeviceSpeechSession(this, this) { onDeviceModelStatus = it }
         refreshState()
 
         setContent {
@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity(), SpeechSessionListener {
                     hasMicrophonePermission = hasMicrophonePermission,
                     keyboardEnabled = keyboardEnabled,
                     keyboardSelected = keyboardSelected,
-                    onDeviceRecognizerAvailable = onDeviceRecognizerAvailable,
+                    onDeviceModelStatus = onDeviceModelStatus,
                     onToggleDictation = ::toggleDictation,
                     onCancelDictation = speechSession::cancel,
                     onRequestPermission = ::requestMicrophonePermission,
@@ -174,7 +174,7 @@ class MainActivity : ComponentActivity(), SpeechSessionListener {
             this,
             Manifest.permission.RECORD_AUDIO,
         ) == PackageManager.PERMISSION_GRANTED
-        onDeviceRecognizerAvailable = SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+        speechSession.checkModelSupport()
         val inputMethodManager = getSystemService(InputMethodManager::class.java)
         keyboardEnabled = inputMethodManager.enabledInputMethodList.any {
             it.packageName == packageName
@@ -249,7 +249,7 @@ private fun ScribeApp(
     hasMicrophonePermission: Boolean,
     keyboardEnabled: Boolean,
     keyboardSelected: Boolean,
-    onDeviceRecognizerAvailable: Boolean,
+    onDeviceModelStatus: OnDeviceModelStatus,
     onToggleDictation: () -> Unit,
     onCancelDictation: () -> Unit,
     onRequestPermission: () -> Unit,
@@ -294,7 +294,7 @@ private fun ScribeApp(
                 hasMicrophonePermission = hasMicrophonePermission,
                 keyboardEnabled = keyboardEnabled,
                 keyboardSelected = keyboardSelected,
-                onDeviceRecognizerAvailable = onDeviceRecognizerAvailable,
+                onDeviceModelStatus = onDeviceModelStatus,
                 onToggleDictation = onToggleDictation,
                 onCancelDictation = onCancelDictation,
                 onRequestPermission = onRequestPermission,
@@ -326,7 +326,7 @@ private fun HomePage(
     hasMicrophonePermission: Boolean,
     keyboardEnabled: Boolean,
     keyboardSelected: Boolean,
-    onDeviceRecognizerAvailable: Boolean,
+    onDeviceModelStatus: OnDeviceModelStatus,
     onToggleDictation: () -> Unit,
     onCancelDictation: () -> Unit,
     onRequestPermission: () -> Unit,
@@ -362,7 +362,7 @@ private fun HomePage(
         }
         item { KeyboardTestCard() }
         item {
-            ModelCard(onDeviceRecognizerAvailable, onRequestModel)
+            ModelCard(onDeviceModelStatus, onRequestModel)
         }
         if (history.isNotEmpty()) {
             item { Text("Recent dictations", style = MaterialTheme.typography.titleMedium) }
@@ -493,30 +493,47 @@ private fun SetupRow(number: String, title: String, complete: Boolean, action: (
 }
 
 @Composable
-private fun ModelCard(available: Boolean, onRequestModel: () -> Unit) {
+private fun ModelCard(status: OnDeviceModelStatus, onRequestModel: () -> Unit) {
     Card {
         Row(
             modifier = Modifier.fillMaxWidth().padding(18.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (available) {
+            if (status == OnDeviceModelStatus.READY) {
                 Icon(Icons.Default.CheckCircle, contentDescription = null)
             } else {
                 Text("!", color = MaterialTheme.colorScheme.tertiary, fontWeight = FontWeight.Bold, fontSize = 22.sp)
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    if (available) "On-device recognizer ready" else "On-device recognizer unavailable",
+                    when (status) {
+                        OnDeviceModelStatus.READY -> "On-device model ready"
+                        OnDeviceModelStatus.CHECKING -> "Checking on-device model"
+                        OnDeviceModelStatus.DOWNLOADING -> "Downloading on-device model"
+                        OnDeviceModelStatus.PENDING -> "On-device model download scheduled"
+                        OnDeviceModelStatus.DOWNLOADABLE -> "On-device model required"
+                        OnDeviceModelStatus.UNAVAILABLE -> "On-device recognizer unavailable"
+                        OnDeviceModelStatus.UNKNOWN -> "On-device model status unavailable"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    if (available) "Speech stays on this device."
-                    else "Install an offline speech model in Android's language settings.",
+                    when (status) {
+                        OnDeviceModelStatus.READY -> "Speech stays on this device."
+                        OnDeviceModelStatus.CHECKING -> "Asking Android which offline language model is installed."
+                        OnDeviceModelStatus.DOWNLOADING -> "Android is preparing the private speech model."
+                        OnDeviceModelStatus.PENDING -> "Android will finish the offline download when conditions allow."
+                        OnDeviceModelStatus.DOWNLOADABLE -> "Install the offline speech model before dictating."
+                        OnDeviceModelStatus.UNAVAILABLE -> "This device has no on-device recognition service."
+                        OnDeviceModelStatus.UNKNOWN -> "Try a private dictation or request the offline model."
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (!available) OutlinedButton(onClick = onRequestModel) { Text("Install") }
+            if (status == OnDeviceModelStatus.DOWNLOADABLE || status == OnDeviceModelStatus.UNKNOWN) {
+                OutlinedButton(onClick = onRequestModel) { Text("Install") }
+            }
         }
     }
 }

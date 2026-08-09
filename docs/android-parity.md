@@ -51,7 +51,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 2, the repository has local automated evidence for:
+As of Android `versionCode` 3, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, email, URL, password, multiline, and search/action behavior;
@@ -61,16 +61,24 @@ As of Android `versionCode` 2, the repository has local automated evidence for:
   alternate names, click actions, and long-click alternate actions;
 - guarded undo of the last dictation, plus hold-delete acceleration from
   characters to whole words using Unicode code-point deletion;
+- the exact 236,859-row iOS bigram corpus, context/frequency/tap-distance
+  correction ranking, unambiguous contractions, and private accept/reject
+  learning (the packaged corpus matches the source SHA-256);
+- the API 34 model-download progress/success/scheduled/error contract, with an
+  API 33 fallback and explicit installed/pending/downloadable model states;
 - unit tests, Android instrumentation-test compilation, APK assembly, lint, and
   a manifest with no `INTERNET` permission.
 
-The available emulator currently has only 318 MB free in `/data` and Android's
-package installer rejects the 28 MB debug APK at its low-storage threshold.
-No unrelated emulator apps or data were removed. Therefore the new field-mode,
-virtual-accessibility-node, and interaction instrumentation tests still require
-a device or emulator with adequate free storage. The TalkBack audit, third-party
-app matrix, offline dictation proof, tablet/landscape screenshots, and Android
-tester distribution remain open runtime evidence—not completed rows.
+The existing emulator has only 318 MB free in `/data`, so Android rejects the
+31 MB debug APK at its low-storage threshold. A clean isolated AVD with a 6 GB
+data partition was also attempted, but this host denied the emulator's
+executable-memory mapping and the guest remained offline; the failed AVD was
+moved to Trash without touching the existing emulator or unrelated app data.
+Therefore the field-mode, corpus, Compose-flow, private-store, and virtual-node
+instrumentation tests still require a physical device or a functioning emulator.
+The TalkBack audit, third-party app matrix, airplane-mode dictation, tablet and
+landscape screenshots, and Android tester distribution remain open runtime
+evidence—not completed rows.
 
 ## Known platform substitutions
 

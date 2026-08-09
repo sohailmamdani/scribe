@@ -26,6 +26,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private val suggestionGeneration = AtomicInteger()
     private lateinit var preferencesStore: ScribePreferences
     private lateinit var historyStore: DictationHistoryStore
+    private lateinit var correctionLearning: KeyboardCorrectionLearningStore
     private lateinit var speechSession: OnDeviceSpeechSession
     private var keyboardView: ScribeKeyboardView? = null
     private var preferences = KeyboardPreferences()
@@ -36,6 +37,8 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private var fieldProfile = KeyboardFieldProfile()
     private var lastCorrection: AppliedCorrection? = null
     private var lastDictationInsertion: String? = null
+    private val tapEvidence = mutableListOf<KeyboardTapEvidence?>()
+    private var lastSpaceTapMillis: Long? = null
     private var speechMessage = "Dictate"
     private var partialTranscript = ""
     private var audioLevel = 0f
@@ -45,6 +48,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         super.onCreate()
         preferencesStore = ScribePreferences(this)
         historyStore = DictationHistoryStore(this)
+        correctionLearning = KeyboardCorrectionLearningStore(this)
         speechSession = OnDeviceSpeechSession(this, this)
         worker.execute {
             val loadedLexicon = KeyboardLexicon(this)
@@ -86,6 +90,8 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         }
         lastCorrection = null
         lastDictationInsertion = null
+        tapEvidence.clear()
+        lastSpaceTapMillis = null
         currentSuggestions = emptyList()
         suggestionWord = null
         keyboardView?.updatePreferences(preferences)
@@ -98,6 +104,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        acceptPendingCorrection()
         if (speechState == SpeechSessionState.LISTENING || speechState == SpeechSessionState.PREPARING) {
             speechSession.cancel()
         }
@@ -110,21 +117,25 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         super.onDestroy()
     }
 
-    override fun onText(text: String, isLetter: Boolean) {
+    override fun onText(text: String, isLetter: Boolean, evidence: KeyboardTapEvidence?) {
         if (text.isEmpty()) return
         clearDictationUndo()
+        acceptPendingCorrection()
+        lastSpaceTapMillis = null
+        if (isLetter) tapEvidence += evidence else tapEvidence.clear()
         if (!isLetter && text.singleOrNull() in listOf('.', ',', '?', '!', ';', ':')) {
             lastCorrection = applyAutomaticCorrection(text)
             currentInputConnection?.commitText(text, 1)
         } else {
             currentInputConnection?.commitText(text, 1)
-            lastCorrection = null
         }
         updateAfterDocumentChange()
     }
 
     override fun onDelete() {
         clearDictationUndo()
+        tapEvidence.clear()
+        lastSpaceTapMillis = null
         val correction = lastCorrection
         val before = contextBefore()
         if (correction != null && before?.endsWith(correction.replacement + correction.delimiter) == true) {
@@ -133,9 +144,11 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                     correction.delimiter.codePointCount(0, correction.delimiter.length),
                 0,
             )
-            currentInputConnection?.commitText(correction.original, 1)
+            currentInputConnection?.commitText(correction.original + correction.delimiter, 1)
+            correctionLearning.recordRejected(correction.original, correction.replacement)
             lastCorrection = null
         } else {
+            acceptPendingCorrection()
             currentInputConnection?.deleteSurroundingTextInCodePoints(1, 0)
         }
         updateAfterDocumentChange()
@@ -143,6 +156,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onDeleteWord() {
         clearDictationUndo()
+        tapEvidence.clear()
+        acceptPendingCorrection()
+        lastSpaceTapMillis = null
         val count = KeyboardEditingRules.deleteWordCodePointCount(contextBefore())
         currentInputConnection?.deleteSurroundingTextInCodePoints(count, 0)
         lastCorrection = null
@@ -151,24 +167,33 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onSpace() {
         clearDictationUndo()
+        acceptPendingCorrection()
         val before = contextBefore()
+        val now = System.currentTimeMillis()
+        val elapsed = lastSpaceTapMillis?.let { now - it }
         if (preferences.doubleSpacePeriodEnabled &&
             fieldProfile.layout == KeyboardFieldLayout.TEXT &&
-            KeyboardEditingRules.shouldReplaceDoubleSpace(before)
+            KeyboardEditingRules.shouldReplaceDoubleSpace(before, elapsed)
         ) {
             currentInputConnection?.deleteSurroundingTextInCodePoints(1, 0)
             currentInputConnection?.commitText(". ", 1)
             lastCorrection = null
+            lastSpaceTapMillis = null
         } else {
             val correction = applyAutomaticCorrection(" ")
             currentInputConnection?.commitText(" ", 1)
             lastCorrection = correction
+            lastSpaceTapMillis = now
         }
+        tapEvidence.clear()
         updateAfterDocumentChange()
     }
 
     override fun onEnter() {
         clearDictationUndo()
+        acceptPendingCorrection()
+        tapEvidence.clear()
+        lastSpaceTapMillis = null
         val options = currentInputEditorInfo?.imeOptions ?: EditorInfo.IME_ACTION_NONE
         val action = options and EditorInfo.IME_MASK_ACTION
         if (fieldProfile.returnAction != KeyboardReturnAction.RETURN &&
@@ -184,6 +209,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onMoveCursor(characters: Int) {
         clearDictationUndo()
+        acceptPendingCorrection()
+        tapEvidence.clear()
+        lastSpaceTapMillis = null
         val keyCode = if (characters < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
         repeat(kotlin.math.abs(characters)) {
             currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
@@ -195,6 +223,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onSwipe(keys: List<Char>) {
         clearDictationUndo()
+        acceptPendingCorrection()
+        tapEvidence.clear()
+        lastSpaceTapMillis = null
         val decoder = swipeDecoder ?: return
         val generation = suggestionGeneration.incrementAndGet()
         worker.execute {
@@ -205,7 +236,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                 if (!before.isNullOrEmpty() && !before.last().isWhitespace()) {
                     currentInputConnection?.commitText(" ", 1)
                 }
-                val word = if (KeyboardEditingRules.shouldCapitalize(contextBefore())) {
+                val word = if (automaticShiftRequired()) {
                     decoded.replaceFirstChar(Char::uppercase)
                 } else {
                     decoded
@@ -219,9 +250,13 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onSuggestion(candidate: CorrectionCandidate) {
         clearDictationUndo()
+        acceptPendingCorrection()
+        lastSpaceTapMillis = null
         val word = KeyboardEditingRules.currentWord(contextBefore()) ?: return
         currentInputConnection?.deleteSurroundingTextInCodePoints(word.codePointCount(0, word.length), 0)
         currentInputConnection?.commitText(candidate.text + " ", 1)
+        correctionLearning.recordAccepted(word, candidate.text)
+        tapEvidence.clear()
         lastCorrection = null
         updateAfterDocumentChange()
     }
@@ -248,6 +283,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                     else -> {
                         partialTranscript = ""
                         clearDictationUndo()
+                        acceptPendingCorrection()
+                        tapEvidence.clear()
+                        lastSpaceTapMillis = null
                         speechSession.start()
                     }
                 }
@@ -301,6 +339,8 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         }
         val insertion = TranscriptPolisher.textForInsertion(polished, contextBefore(), contextAfter())
         currentInputConnection?.commitText(insertion, 1)
+        tapEvidence.clear()
+        lastSpaceTapMillis = null
         lastDictationInsertion = insertion
         keyboardView?.updateUndoDictationAvailability(true)
         historyStore.add(polished)
@@ -323,6 +363,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             ?: return null
         currentInputConnection?.deleteSurroundingTextInCodePoints(original.codePointCount(0, original.length), 0)
         currentInputConnection?.commitText(candidate.text, 1)
+        tapEvidence.clear()
         return AppliedCorrection(original, candidate.text, delimiter)
     }
 
@@ -332,17 +373,18 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     private fun updateAutomaticShift() {
-        val shouldShift = when (fieldProfile.capitalization) {
+        keyboardView?.updateAutomaticShift(
+            shouldShift = automaticShiftRequired(),
+            lockAutomatically = fieldProfile.capitalization == KeyboardCapitalization.ALL_CHARACTERS,
+        )
+    }
+
+    private fun automaticShiftRequired(): Boolean = when (fieldProfile.capitalization) {
             KeyboardCapitalization.NONE -> false
             KeyboardCapitalization.WORDS -> KeyboardEditingRules.shouldCapitalizeWord(contextBefore())
             KeyboardCapitalization.SENTENCES -> KeyboardEditingRules.shouldCapitalize(contextBefore())
             KeyboardCapitalization.ALL_CHARACTERS -> true
         }
-        keyboardView?.updateAutomaticShift(
-            shouldShift = shouldShift,
-            lockAutomatically = fieldProfile.capitalization == KeyboardCapitalization.ALL_CHARACTERS,
-        )
-    }
 
     private fun clearDictationUndo() {
         if (lastDictationInsertion == null) return
@@ -350,8 +392,15 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         keyboardView?.updateUndoDictationAvailability(false)
     }
 
+    private fun acceptPendingCorrection() {
+        val correction = lastCorrection ?: return
+        correctionLearning.recordAccepted(correction.original, correction.replacement)
+        lastCorrection = null
+    }
+
     private fun refreshSuggestions() {
         if (!fieldProfile.allowsSuggestions || !preferences.autocorrectionEnabled) {
+            suggestionGeneration.incrementAndGet()
             currentSuggestions = emptyList()
             suggestionWord = null
             keyboardView?.updateSuggestions(emptyList())
@@ -360,14 +409,27 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         val word = KeyboardEditingRules.currentWord(contextBefore())
         val loadedLexicon = lexicon
         if (word == null || loadedLexicon == null) {
+            suggestionGeneration.incrementAndGet()
             currentSuggestions = emptyList()
             suggestionWord = word
             keyboardView?.updateSuggestions(emptyList())
             return
         }
         val generation = suggestionGeneration.incrementAndGet()
+        val contextSnapshot = contextBefore()?.toString()
+        val evidenceSnapshot = tapEvidence.takeLast(word.length).let { suffix ->
+            List<KeyboardTapEvidence?>(word.length - suffix.size) { null } + suffix
+        }
+        val protectedSnapshot = correctionLearning.protectedWordsSnapshot()
+        val acceptedSnapshot = correctionLearning.acceptedCountsSnapshot()
         worker.execute {
-            val candidates = loadedLexicon.corrections(word)
+            val candidates = loadedLexicon.corrections(
+                original = word,
+                contextBefore = contextSnapshot,
+                protectedWords = protectedSnapshot,
+                acceptedCounts = acceptedSnapshot,
+                evidence = evidenceSnapshot,
+            )
             mainHandler.post {
                 if (generation != suggestionGeneration.get()) return@post
                 val liveWord = KeyboardEditingRules.currentWord(contextBefore())
