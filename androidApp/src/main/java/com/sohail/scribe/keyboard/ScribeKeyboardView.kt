@@ -56,6 +56,7 @@ private data class KeySpec(
     val rect: RectF = RectF(),
     val alternate: String? = null,
     val candidate: CorrectionCandidate? = null,
+    val enabled: Boolean = true,
 )
 
 class ScribeKeyboardView(context: Context) : View(context) {
@@ -141,10 +142,10 @@ class ScribeKeyboardView(context: Context) : View(context) {
                     (accessibleBounds?.bottom ?: key.rect.bottom).toInt(),
                 ),
             )
-            node.isClickable = true
-            node.isEnabled = true
-            node.addAction(AccessibilityNodeInfoCompat.ACTION_CLICK)
-            if (preferences.alternateSymbolsEnabled && key.alternate != null) {
+            node.isClickable = key.enabled
+            node.isEnabled = key.enabled
+            if (key.enabled) node.addAction(AccessibilityNodeInfoCompat.ACTION_CLICK)
+            if (key.enabled && preferences.alternateSymbolsEnabled && key.alternate != null) {
                 node.isLongClickable = true
                 node.addAction(AccessibilityNodeInfoCompat.ACTION_LONG_CLICK)
             }
@@ -155,7 +156,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
             action: Int,
             arguments: Bundle?,
         ): Boolean {
-            val key = keys.getOrNull(virtualViewId) ?: return false
+            val key = keys.getOrNull(virtualViewId)?.takeIf(KeySpec::enabled) ?: return false
             return when (action) {
                 AccessibilityNodeInfoCompat.ACTION_CLICK -> {
                     commitKey(key)
@@ -375,7 +376,9 @@ class ScribeKeyboardView(context: Context) : View(context) {
         val pressed = currentKey?.id == key.id && !isSwiping
         val control = key.kind != KeyKind.TEXT && key.kind != KeyKind.SPACE && key.kind != KeyKind.SUGGESTION
         paint.color = when {
+            !key.enabled -> if (dark) Color.rgb(62, 63, 69) else Color.rgb(190, 192, 198)
             key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.LISTENING -> Color.rgb(210, 52, 66)
+            key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.FAILED -> Color.rgb(194, 111, 0)
             key.kind == KeyKind.MICROPHONE -> Color.rgb(82, 79, 205)
             pressed -> if (dark) Color.rgb(106, 107, 115) else Color.rgb(183, 185, 191)
             key.kind == KeyKind.SUGGESTION -> Color.TRANSPARENT
@@ -416,6 +419,8 @@ class ScribeKeyboardView(context: Context) : View(context) {
         key.kind == KeyKind.ENTER -> key.label
         key.kind == KeyKind.NEXT_INPUT -> "◉"
         key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.LISTENING -> "■"
+        key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.FAILED -> "↻"
+        key.kind == KeyKind.MICROPHONE && !key.enabled -> "…"
         key.kind == KeyKind.MICROPHONE -> "●"
         key.kind == KeyKind.SPACE && spaceCursorMode -> "Move cursor"
         else -> key.label
@@ -501,7 +506,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
     }
 
     private fun beginTouch(x: Float, y: Float) {
-        currentKey = keyAt(x, y)
+        currentKey = keyAt(x, y)?.takeIf(KeySpec::enabled)
         downX = x
         downY = y
         cursorSteps = 0
@@ -645,6 +650,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
     }
 
     private fun commitKey(key: KeySpec, touchX: Float? = null, touchY: Float? = null) {
+        if (!key.enabled) return
         playClick()
         when (key.kind) {
             KeyKind.TEXT -> {
@@ -786,6 +792,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         val micWidth = if (fieldProfile.allowsDictation) dp(62f) else 0f
         val gap = dp(6f)
         val micLeft = viewWidth - dp(6f) - micWidth
+        val dictationControl = KeyboardDictationControlPolicy.control(speechState)
         val active = speechState == SpeechSessionState.PREPARING ||
             speechState == SpeechSessionState.LISTENING ||
             speechState == SpeechSessionState.PROCESSING
@@ -821,9 +828,10 @@ class ScribeKeyboardView(context: Context) : View(context) {
         if (fieldProfile.allowsDictation) {
             keys += KeySpec(
                 id = "microphone",
-                label = "Dictate",
+                label = dictationControl.label,
                 kind = KeyKind.MICROPHONE,
                 rect = RectF(micLeft, top, viewWidth - dp(6f), bottom),
+                enabled = dictationControl.enabled,
             )
         }
     }

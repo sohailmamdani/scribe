@@ -456,6 +456,9 @@ private fun DictationHero(
                 fontWeight = FontWeight.Bold,
             )
             Text(message, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (state == SpeechSessionState.FAILED) {
+                OutlinedButton(onClick = onToggle) { Text("Try again") }
+            }
             if (state == SpeechSessionState.LISTENING) {
                 LinearProgressIndicator(progress = { audioLevel }, modifier = Modifier.fillMaxWidth())
                 TextButton(onClick = onCancel) { Text("Cancel") }

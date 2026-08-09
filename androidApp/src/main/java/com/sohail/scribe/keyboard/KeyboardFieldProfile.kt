@@ -117,7 +117,13 @@ object KeyboardAccessibilityLabels {
             "space" -> "Space"
             "return" -> visibleLabel.replaceFirstChar(Char::uppercase)
             "next" -> "Next keyboard"
-            "microphone" -> if (visibleLabel == "Stop") "Stop dictation" else "Start dictation"
+            "microphone" -> when (visibleLabel) {
+                "Stop" -> "Stop dictation"
+                "Retry" -> "Retry dictation"
+                "Starting" -> "Dictation is starting"
+                "Finishing" -> "Dictation is processing"
+                else -> "Start dictation"
+            }
             "cancel" -> "Cancel dictation"
             "undo-dictation" -> "Undo last dictation"
             "undo-autocorrection" -> "Undo autocorrection to ${visibleLabel.removePrefix("Undo to ")}"

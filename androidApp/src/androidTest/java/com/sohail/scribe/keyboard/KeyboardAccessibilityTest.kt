@@ -11,6 +11,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.sohail.scribe.core.KeyboardPreferences
 import com.sohail.scribe.core.SymbolTapBehavior
+import com.sohail.scribe.speech.SpeechSessionState
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -19,6 +21,38 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class KeyboardAccessibilityTest {
+    @Test fun dictationControlAnnouncesRetryAndDisablesNoOpBusyActions() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val listener = RecordingKeyboardListener()
+        instrumentation.runOnMainSync {
+            val view = measuredKeyboardView(instrumentation.targetContext, listener)
+            val provider = view.accessibilityNodeProvider!!
+
+            clickVirtualKey(view, "Start dictation")
+            assertEquals(1, listener.dictationToggles)
+
+            view.updateSpeechState(SpeechSessionState.FAILED, "Try again")
+            clickVirtualKey(view, "Retry dictation")
+            assertEquals(2, listener.dictationToggles)
+
+            view.updateSpeechState(SpeechSessionState.PREPARING, "Starting")
+            val startingIndex = virtualKeyIndex(view, "Dictation is starting")
+            assertFalse(provider.createAccessibilityNodeInfo(startingIndex)!!.isEnabled)
+            assertFalse(provider.performAction(startingIndex, AccessibilityNodeInfo.ACTION_CLICK, null))
+            assertEquals(2, listener.dictationToggles)
+
+            view.updateSpeechState(SpeechSessionState.PROCESSING, "Finishing")
+            val processingIndex = virtualKeyIndex(view, "Dictation is processing")
+            assertFalse(provider.createAccessibilityNodeInfo(processingIndex)!!.isClickable)
+            assertFalse(provider.performAction(processingIndex, AccessibilityNodeInfo.ACTION_CLICK, null))
+            assertEquals(2, listener.dictationToggles)
+
+            view.updateSpeechState(SpeechSessionState.LISTENING, "Listening")
+            clickVirtualKey(view, "Stop dictation")
+            assertEquals(3, listener.dictationToggles)
+        }
+    }
+
     @Test fun disablingAlternatesAlsoRemovesTheTalkBackAction() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
@@ -317,11 +351,16 @@ class KeyboardAccessibilityTest {
 
     private fun clickVirtualKey(view: ScribeKeyboardView, label: String) {
         val provider = view.accessibilityNodeProvider!!
+        val index = virtualKeyIndex(view, label)
+        assertTrue(provider.performAction(index, AccessibilityNodeInfo.ACTION_CLICK, null))
+    }
+
+    private fun virtualKeyIndex(view: ScribeKeyboardView, label: String): Int {
+        val provider = view.accessibilityNodeProvider!!
         val childCount = provider.createAccessibilityNodeInfo(View.NO_ID)?.childCount ?: 0
-        val index = (0 until childCount).first { candidate ->
+        return (0 until childCount).first { candidate ->
             provider.createAccessibilityNodeInfo(candidate)?.contentDescription?.toString() == label
         }
-        assertTrue(provider.performAction(index, AccessibilityNodeInfo.ACTION_CLICK, null))
     }
 
     @Suppress("DEPRECATION") // The virtual-key provider exposes parent-relative test bounds.
@@ -337,6 +376,7 @@ class KeyboardAccessibilityTest {
         val texts = mutableListOf<String>()
         var spaces = 0
         var cursorMovement = 0
+        var dictationToggles = 0
 
         override fun onText(text: String, isLetter: Boolean, evidence: KeyboardTapEvidence?) {
             texts += text
@@ -351,7 +391,7 @@ class KeyboardAccessibilityTest {
         override fun onSuggestion(candidate: CorrectionCandidate) = Unit
         override fun onUndoAutocorrection() = Unit
         override fun onNextInputMethod() = Unit
-        override fun onToggleDictation() = Unit
+        override fun onToggleDictation() { dictationToggles += 1 }
         override fun onCancelDictation() = Unit
         override fun onUndoDictation() = Unit
     }
