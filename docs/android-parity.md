@@ -51,10 +51,12 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 7, the repository has local automated evidence for:
+As of Android `versionCode` 8, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
-  phone, email, URL, password, multiline, and search/action behavior;
+  phone, date, time, email, URL, password, multiline, and search/action
+  behavior, with date/time separators, search-field double-space parity, and
+  dedicated pads that cannot accidentally switch back to letters;
 - password-field suppression of dictation, transcript state, suggestions, and
   the microphone control;
 - TalkBack virtual button nodes for every rendered key, spoken punctuation and
@@ -91,7 +93,7 @@ As of Android `versionCode` 7, the repository has local automated evidence for:
   selected return-to-letters scope;
 - the API 34 model-download progress/success/scheduled/error contract, with an
   API 33 fallback and explicit installed/pending/downloadable model states;
-- all 50 Android unit tests, all 15 instrumentation tests on an API 36 emulator,
+- all 52 Android unit tests, all 16 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with

@@ -214,6 +214,31 @@ class KeyboardAccessibilityTest {
         }
     }
 
+    @Test fun dateAndTimePadsExposeSpokenSeparatorKeys() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val dateListener = RecordingKeyboardListener()
+            val timeListener = RecordingKeyboardListener()
+            val dateView = measuredFieldKeyboardView(
+                instrumentation.targetContext,
+                InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_DATE,
+                dateListener,
+            )
+            val timeView = measuredFieldKeyboardView(
+                instrumentation.targetContext,
+                InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_TIME,
+                timeListener,
+            )
+
+            assertTrue(virtualKeyLabels(dateView).containsAll(listOf("Slash", "Hyphen", "Period")))
+            assertTrue(virtualKeyLabels(timeView).containsAll(listOf("Colon", "AM", "PM")))
+            listOf("Slash", "Hyphen", "Period").forEach { clickVirtualKey(dateView, it) }
+            listOf("Colon", "AM", "PM").forEach { clickVirtualKey(timeView, it) }
+            assertEquals(listOf("/", "-", "."), dateListener.texts)
+            assertEquals(listOf(":", "AM", "PM"), timeListener.texts)
+        }
+    }
+
     @Test fun correctionLearningPersistsAcceptsAndRejectionsPrivately() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         context.getSharedPreferences("scribe.autocorrection.learning", 0).edit().clear().commit()
@@ -262,6 +287,41 @@ class KeyboardAccessibilityTest {
             View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY),
         )
         layout(0, 0, 1_080, 900)
+    }
+
+    private fun measuredFieldKeyboardView(
+        context: android.content.Context,
+        inputType: Int,
+        actionListener: KeyboardActionListener,
+    ) =
+        ScribeKeyboardView(context).apply {
+            listener = actionListener
+            updatePreferences(
+                KeyboardPreferences(symbolTapBehavior = SymbolTapBehavior.RETURN_TO_LETTERS),
+            )
+            updateFieldProfile(KeyboardFieldProfile.from(inputType, 0))
+            measure(
+                View.MeasureSpec.makeMeasureSpec(1_080, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY),
+            )
+            layout(0, 0, 1_080, 900)
+        }
+
+    private fun virtualKeyLabels(view: ScribeKeyboardView): List<String> {
+        val provider = view.accessibilityNodeProvider!!
+        val childCount = provider.createAccessibilityNodeInfo(View.NO_ID)?.childCount ?: 0
+        return (0 until childCount).mapNotNull { candidate ->
+            provider.createAccessibilityNodeInfo(candidate)?.contentDescription?.toString()
+        }
+    }
+
+    private fun clickVirtualKey(view: ScribeKeyboardView, label: String) {
+        val provider = view.accessibilityNodeProvider!!
+        val childCount = provider.createAccessibilityNodeInfo(View.NO_ID)?.childCount ?: 0
+        val index = (0 until childCount).first { candidate ->
+            provider.createAccessibilityNodeInfo(candidate)?.contentDescription?.toString() == label
+        }
+        assertTrue(provider.performAction(index, AccessibilityNodeInfo.ACTION_CLICK, null))
     }
 
     @Suppress("DEPRECATION") // The virtual-key provider exposes parent-relative test bounds.

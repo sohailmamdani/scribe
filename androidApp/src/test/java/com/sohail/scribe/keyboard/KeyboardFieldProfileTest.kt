@@ -48,6 +48,36 @@ class KeyboardFieldProfileTest {
         )
     }
 
+    @Test fun dateAndTimeFieldsUsePurposeBuiltNumberLayouts() {
+        val date = profile(
+            InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_DATE,
+        )
+        assertEquals(KeyboardFieldLayout.DATE, date.layout)
+        assertFalse(date.sensitive)
+        assertTrue(date.allowsDictation)
+        assertEquals(
+            KeyboardFieldLayout.TIME,
+            profile(InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_TIME).layout,
+        )
+        assertEquals(
+            KeyboardFieldLayout.DATETIME,
+            profile(InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_NORMAL).layout,
+        )
+    }
+
+    @Test fun webSearchFieldsKeepSuggestionsButDisableDoubleSpacePeriod() {
+        val variation = profile(
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_EDIT_TEXT,
+        )
+        assertTrue(variation.allowsSuggestions)
+        assertFalse(variation.allowsDoubleSpacePeriod)
+
+        val action = profile(InputType.TYPE_CLASS_TEXT, EditorInfo.IME_ACTION_SEARCH)
+        assertTrue(action.allowsSuggestions)
+        assertFalse(action.allowsDoubleSpacePeriod)
+        assertTrue(profile(InputType.TYPE_CLASS_TEXT).allowsDoubleSpacePeriod)
+    }
+
     @Test fun everyPasswordVariationDisablesSuggestionsAndDictation() {
         val variations = listOf(
             InputType.TYPE_TEXT_VARIATION_PASSWORD,

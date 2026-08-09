@@ -233,7 +233,11 @@ class ScribeKeyboardView(context: Context) : View(context) {
     fun updateFieldProfile(value: KeyboardFieldProfile) {
         fieldProfile = value
         page = when (value.layout) {
-            KeyboardFieldLayout.NUMBER -> KeyboardPage.NUMBER_PAD
+            KeyboardFieldLayout.NUMBER,
+            KeyboardFieldLayout.DATE,
+            KeyboardFieldLayout.TIME,
+            KeyboardFieldLayout.DATETIME,
+            -> KeyboardPage.NUMBER_PAD
             KeyboardFieldLayout.PHONE -> KeyboardPage.PHONE_PAD
             else -> KeyboardPage.LETTERS
         }
@@ -634,12 +638,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private fun commitPunctuation(text: String) {
         playClick()
         listener?.onText(text)
-        if (page != KeyboardPage.LETTERS && KeyboardEditingRules.shouldReturnToLetters(
-                preferences.symbolTapBehavior,
-                preferences.symbolTapScope,
-                page == KeyboardPage.SYMBOLS,
-            )
-        ) {
+        if (shouldReturnToLettersAfterSymbol()) {
             page = KeyboardPage.LETTERS
             rebuildKeys(width, height)
         }
@@ -662,12 +661,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
                     evidence,
                 )
                 if (isLetter && shift == ShiftState.ONCE) shift = ShiftState.OFF
-                if (!isLetter && page != KeyboardPage.LETTERS && KeyboardEditingRules.shouldReturnToLetters(
-                        preferences.symbolTapBehavior,
-                        preferences.symbolTapScope,
-                        page == KeyboardPage.SYMBOLS,
-                    )
-                ) page = KeyboardPage.LETTERS
+                if (!isLetter && shouldReturnToLettersAfterSymbol()) page = KeyboardPage.LETTERS
             }
             KeyKind.SHIFT -> toggleShift()
             KeyKind.DELETE -> listener?.onDelete()
@@ -696,17 +690,20 @@ class ScribeKeyboardView(context: Context) : View(context) {
         ) {
             shift = ShiftState.OFF
         }
-        if (page != KeyboardPage.LETTERS && KeyboardEditingRules.shouldReturnToLetters(
-                preferences.symbolTapBehavior,
-                preferences.symbolTapScope,
-                page == KeyboardPage.SYMBOLS,
-            )
-        ) {
+        if (shouldReturnToLettersAfterSymbol()) {
             page = KeyboardPage.LETTERS
         }
         rebuildKeys(width, height)
         invalidate()
     }
+
+    private fun shouldReturnToLettersAfterSymbol(): Boolean =
+        (page == KeyboardPage.NUMBERS || page == KeyboardPage.SYMBOLS) &&
+            KeyboardEditingRules.shouldReturnToLetters(
+                preferences.symbolTapBehavior,
+                preferences.symbolTapScope,
+                page == KeyboardPage.SYMBOLS,
+            )
 
     private fun tapEvidence(character: Char, touchX: Float, touchY: Float): KeyboardTapEvidence {
         val distances = keys.asSequence().mapNotNull { key ->
@@ -888,10 +885,15 @@ class ScribeKeyboardView(context: Context) : View(context) {
         addTextRow(listOf("1", "2", "3"), viewWidth, top, rowHeight, viewWidth * 0.19f)
         addTextRow(listOf("4", "5", "6"), viewWidth, top + rowHeight + rowGap, rowHeight, viewWidth * 0.19f)
         addTextRow(listOf("7", "8", "9"), viewWidth, top + (rowHeight + rowGap) * 2f, rowHeight, viewWidth * 0.19f)
-        val extras = buildList {
-            if (fieldProfile.signedNumber) add("-")
-            add("0")
-            if (fieldProfile.decimalNumber) add(".")
+        val extras = when (fieldProfile.layout) {
+            KeyboardFieldLayout.DATE -> listOf("/", "0", "-", ".")
+            KeyboardFieldLayout.TIME -> listOf(":", "0", "AM", "PM")
+            KeyboardFieldLayout.DATETIME -> listOf("/", "0", ":", "-")
+            else -> buildList {
+                if (fieldProfile.signedNumber) add("-")
+                add("0")
+                if (fieldProfile.decimalNumber) add(".")
+            }
         }
         addPadBottomRow(viewWidth, top + (rowHeight + rowGap) * 3f, rowHeight, extras)
     }

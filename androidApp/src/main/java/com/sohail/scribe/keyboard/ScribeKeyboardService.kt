@@ -251,7 +251,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         val now = System.currentTimeMillis()
         val elapsed = lastSpaceTapMillis?.let { now - it }
         if (preferences.doubleSpacePeriodEnabled &&
-            fieldProfile.layout == KeyboardFieldLayout.TEXT &&
+            fieldProfile.allowsDoubleSpacePeriod &&
             KeyboardEditingRules.shouldReplaceDoubleSpace(before, elapsed)
         ) {
             currentInputConnection?.deleteSurroundingTextInCodePoints(1, 0)

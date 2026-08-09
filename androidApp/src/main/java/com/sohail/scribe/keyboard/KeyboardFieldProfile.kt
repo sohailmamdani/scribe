@@ -3,7 +3,7 @@ package com.sohail.scribe.keyboard
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
 
-enum class KeyboardFieldLayout { TEXT, NUMBER, PHONE, EMAIL, URI }
+enum class KeyboardFieldLayout { TEXT, NUMBER, PHONE, DATE, TIME, DATETIME, EMAIL, URI }
 
 enum class KeyboardCapitalization { NONE, WORDS, SENTENCES, ALL_CHARACTERS }
 
@@ -24,6 +24,7 @@ data class KeyboardFieldProfile(
     val allowsSuggestions: Boolean = true,
     val allowsDictation: Boolean = true,
     val allowsPersonalizedLearning: Boolean = true,
+    val allowsDoubleSpacePeriod: Boolean = true,
     val allowsShift: Boolean = true,
     val capitalization: KeyboardCapitalization = KeyboardCapitalization.SENTENCES,
     val signedNumber: Boolean = false,
@@ -33,14 +34,22 @@ data class KeyboardFieldProfile(
         fun from(inputType: Int, imeOptions: Int): KeyboardFieldProfile {
             val inputClass = inputType and InputType.TYPE_MASK_CLASS
             val variation = inputType and InputType.TYPE_MASK_VARIATION
-            val sensitive = variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-                variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-                variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
-                variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            val sensitive = when (inputClass) {
+                InputType.TYPE_CLASS_TEXT -> variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                    variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                    variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+                InputType.TYPE_CLASS_NUMBER ->
+                    variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+                else -> false
+            }
             val layout = when {
                 inputClass == InputType.TYPE_CLASS_NUMBER -> KeyboardFieldLayout.NUMBER
                 inputClass == InputType.TYPE_CLASS_PHONE -> KeyboardFieldLayout.PHONE
-                inputClass == InputType.TYPE_CLASS_DATETIME -> KeyboardFieldLayout.NUMBER
+                inputClass == InputType.TYPE_CLASS_DATETIME -> when (variation) {
+                    InputType.TYPE_DATETIME_VARIATION_DATE -> KeyboardFieldLayout.DATE
+                    InputType.TYPE_DATETIME_VARIATION_TIME -> KeyboardFieldLayout.TIME
+                    else -> KeyboardFieldLayout.DATETIME
+                }
                 variation == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
                     variation == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS -> KeyboardFieldLayout.EMAIL
                 variation == InputType.TYPE_TEXT_VARIATION_URI -> KeyboardFieldLayout.URI
@@ -56,6 +65,9 @@ data class KeyboardFieldProfile(
                 allowsDictation = !sensitive,
                 allowsPersonalizedLearning =
                     imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING == 0,
+                allowsDoubleSpacePeriod = textLayout &&
+                    variation != InputType.TYPE_TEXT_VARIATION_WEB_EDIT_TEXT &&
+                    returnActionFor(imeOptions) != KeyboardReturnAction.SEARCH,
                 allowsShift = layout == KeyboardFieldLayout.TEXT ||
                     layout == KeyboardFieldLayout.EMAIL || layout == KeyboardFieldLayout.URI,
                 capitalization = capitalizationFor(inputType, layout),
