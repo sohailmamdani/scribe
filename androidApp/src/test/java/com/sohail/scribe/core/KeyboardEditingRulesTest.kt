@@ -18,10 +18,23 @@ class KeyboardEditingRulesTest {
         assertFalse(KeyboardEditingRules.shouldCapitalize("Hello "))
     }
 
+    @Test fun wordCapitalizationTracksWhitespace() {
+        assertTrue(KeyboardEditingRules.shouldCapitalizeWord(null))
+        assertTrue(KeyboardEditingRules.shouldCapitalizeWord("hello "))
+        assertFalse(KeyboardEditingRules.shouldCapitalizeWord("hello"))
+    }
+
     @Test fun doubleSpaceRequiresWordLikePredecessor() {
         assertTrue(KeyboardEditingRules.shouldReplaceDoubleSpace("hello "))
         assertFalse(KeyboardEditingRules.shouldReplaceDoubleSpace("hello"))
         assertFalse(KeyboardEditingRules.shouldReplaceDoubleSpace("( "))
+    }
+
+    @Test fun wordDeleteConsumesTrailingWhitespaceThenOneWordInCodePoints() {
+        assertEquals(6, KeyboardEditingRules.deleteWordCodePointCount("hello "))
+        assertEquals(5, KeyboardEditingRules.deleteWordCodePointCount("hello brave"))
+        assertEquals(1, KeyboardEditingRules.deleteWordCodePointCount("go 👍"))
+        assertEquals(1, KeyboardEditingRules.deleteWordCodePointCount(""))
     }
 
     @Test fun symbolReturnScopeMatchesSettings() {

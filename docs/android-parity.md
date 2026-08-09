@@ -49,6 +49,29 @@ implementation and the listed runtime evidence exist.
 | iPhone/iPad adaptive layout | Android phone/tablet/foldable/landscape sizing | screenshot matrix and layout tests |
 | TestFlight distribution | signed AAB/APK with unique `versionCode`; internal Play track or approved direct-install release path | signed artifact and tester availability |
 
+## Current verified implementation
+
+As of Android `versionCode` 2, the repository has local automated evidence for:
+
+- field profiles derived from `EditorInfo`, including numeric, decimal, signed,
+  phone, email, URL, password, multiline, and search/action behavior;
+- password-field suppression of dictation, transcript state, suggestions, and
+  the microphone control;
+- TalkBack virtual button nodes for every rendered key, spoken punctuation and
+  alternate names, click actions, and long-click alternate actions;
+- guarded undo of the last dictation, plus hold-delete acceleration from
+  characters to whole words using Unicode code-point deletion;
+- unit tests, Android instrumentation-test compilation, APK assembly, lint, and
+  a manifest with no `INTERNET` permission.
+
+The available emulator currently has only 318 MB free in `/data` and Android's
+package installer rejects the 28 MB debug APK at its low-storage threshold.
+No unrelated emulator apps or data were removed. Therefore the new field-mode,
+virtual-accessibility-node, and interaction instrumentation tests still require
+a device or emulator with adequate free storage. The TalkBack audit, third-party
+app matrix, offline dictation proof, tablet/landscape screenshots, and Android
+tester distribution remain open runtime evidence—not completed rows.
+
 ## Known platform substitutions
 
 - Apple Intelligence punctuation refinement has no universal Android API with

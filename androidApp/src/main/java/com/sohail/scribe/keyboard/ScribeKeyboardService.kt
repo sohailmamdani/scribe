@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -34,8 +33,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private var swipeDecoder: SwipeWordDecoder? = null
     private var currentSuggestions: List<CorrectionCandidate> = emptyList()
     private var suggestionWord: String? = null
-    private var sensitiveField = false
+    private var fieldProfile = KeyboardFieldProfile()
     private var lastCorrection: AppliedCorrection? = null
+    private var lastDictationInsertion: String? = null
     private var speechMessage = "Dictate"
     private var partialTranscript = ""
     private var audioLevel = 0f
@@ -61,20 +61,39 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         keyboardView = view
         view.listener = this
         view.updatePreferences(preferences)
+        view.updateFieldProfile(fieldProfile)
         view.updateSpeechState(speechState, speechMessage, partialTranscript, audioLevel)
-        view.updateAutomaticShift(KeyboardEditingRules.shouldCapitalize(contextBefore()))
+        updateAutomaticShift()
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         preferences = preferencesStore.keyboard
-        sensitiveField = info?.inputType?.let(::isSensitiveInputType) == true
+        fieldProfile = KeyboardFieldProfile.from(
+            inputType = info?.inputType ?: 0,
+            imeOptions = info?.imeOptions ?: EditorInfo.IME_ACTION_NONE,
+        )
+        if (!fieldProfile.allowsDictation &&
+            (speechState == SpeechSessionState.LISTENING || speechState == SpeechSessionState.PREPARING)
+        ) {
+            speechSession.cancel()
+        }
+        if (fieldProfile.sensitive) {
+            speechState = SpeechSessionState.IDLE
+            speechMessage = "Dictate"
+            partialTranscript = ""
+            audioLevel = 0f
+        }
         lastCorrection = null
+        lastDictationInsertion = null
         currentSuggestions = emptyList()
         suggestionWord = null
         keyboardView?.updatePreferences(preferences)
+        keyboardView?.updateFieldProfile(fieldProfile)
+        keyboardView?.updateSpeechState(speechState, speechMessage, partialTranscript, audioLevel)
         keyboardView?.updateSuggestions(emptyList())
-        keyboardView?.updateAutomaticShift(KeyboardEditingRules.shouldCapitalize(contextBefore()))
+        keyboardView?.updateUndoDictationAvailability(false)
+        updateAutomaticShift()
         refreshSuggestions()
     }
 
@@ -93,6 +112,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onText(text: String, isLetter: Boolean) {
         if (text.isEmpty()) return
+        clearDictationUndo()
         if (!isLetter && text.singleOrNull() in listOf('.', ',', '?', '!', ';', ':')) {
             lastCorrection = applyAutomaticCorrection(text)
             currentInputConnection?.commitText(text, 1)
@@ -104,6 +124,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onDelete() {
+        clearDictationUndo()
         val correction = lastCorrection
         val before = contextBefore()
         if (correction != null && before?.endsWith(correction.replacement + correction.delimiter) == true) {
@@ -120,9 +141,21 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         updateAfterDocumentChange()
     }
 
+    override fun onDeleteWord() {
+        clearDictationUndo()
+        val count = KeyboardEditingRules.deleteWordCodePointCount(contextBefore())
+        currentInputConnection?.deleteSurroundingTextInCodePoints(count, 0)
+        lastCorrection = null
+        updateAfterDocumentChange()
+    }
+
     override fun onSpace() {
+        clearDictationUndo()
         val before = contextBefore()
-        if (preferences.doubleSpacePeriodEnabled && KeyboardEditingRules.shouldReplaceDoubleSpace(before)) {
+        if (preferences.doubleSpacePeriodEnabled &&
+            fieldProfile.layout == KeyboardFieldLayout.TEXT &&
+            KeyboardEditingRules.shouldReplaceDoubleSpace(before)
+        ) {
             currentInputConnection?.deleteSurroundingTextInCodePoints(1, 0)
             currentInputConnection?.commitText(". ", 1)
             lastCorrection = null
@@ -135,9 +168,12 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onEnter() {
+        clearDictationUndo()
         val options = currentInputEditorInfo?.imeOptions ?: EditorInfo.IME_ACTION_NONE
         val action = options and EditorInfo.IME_MASK_ACTION
-        if (action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
+        if (fieldProfile.returnAction != KeyboardReturnAction.RETURN &&
+            action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED
+        ) {
             currentInputConnection?.performEditorAction(action)
         } else {
             currentInputConnection?.commitText("\n", 1)
@@ -147,6 +183,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onMoveCursor(characters: Int) {
+        clearDictationUndo()
         val keyCode = if (characters < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
         repeat(kotlin.math.abs(characters)) {
             currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
@@ -157,6 +194,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onSwipe(keys: List<Char>) {
+        clearDictationUndo()
         val decoder = swipeDecoder ?: return
         val generation = suggestionGeneration.incrementAndGet()
         worker.execute {
@@ -180,6 +218,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onSuggestion(candidate: CorrectionCandidate) {
+        clearDictationUndo()
         val word = KeyboardEditingRules.currentWord(contextBefore()) ?: return
         currentInputConnection?.deleteSurroundingTextInCodePoints(word.codePointCount(0, word.length), 0)
         currentInputConnection?.commitText(candidate.text + " ", 1)
@@ -197,7 +236,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             SpeechSessionState.PREPARING, SpeechSessionState.PROCESSING -> Unit
             else -> {
                 when {
-                    sensitiveField -> onStateChanged(
+                    fieldProfile.sensitive -> onStateChanged(
                         SpeechSessionState.FAILED,
                         "Dictation is unavailable in password fields.",
                     )
@@ -208,6 +247,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                     )
                     else -> {
                         partialTranscript = ""
+                        clearDictationUndo()
                         speechSession.start()
                     }
                 }
@@ -217,6 +257,22 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onCancelDictation() {
         speechSession.cancel()
+    }
+
+    override fun onUndoDictation() {
+        val insertion = lastDictationInsertion ?: return
+        val before = currentInputConnection?.getTextBeforeCursor(insertion.length, 0)?.toString()
+        if (before?.endsWith(insertion) == true) {
+            currentInputConnection?.deleteSurroundingTextInCodePoints(
+                insertion.codePointCount(0, insertion.length),
+                0,
+            )
+            lastCorrection = null
+            clearDictationUndo()
+            updateAfterDocumentChange()
+        } else {
+            clearDictationUndo()
+        }
     }
 
     override fun onStateChanged(state: SpeechSessionState, message: String) {
@@ -245,6 +301,8 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         }
         val insertion = TranscriptPolisher.textForInsertion(polished, contextBefore(), contextAfter())
         currentInputConnection?.commitText(insertion, 1)
+        lastDictationInsertion = insertion
+        keyboardView?.updateUndoDictationAvailability(true)
         historyStore.add(polished)
         partialTranscript = polished
         onStateChanged(SpeechSessionState.COMPLETED, "Inserted at the cursor")
@@ -258,7 +316,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     private fun applyAutomaticCorrection(delimiter: String): AppliedCorrection? {
-        if (!preferences.autocorrectionEnabled || sensitiveField) return null
+        if (!preferences.autocorrectionEnabled || !fieldProfile.allowsSuggestions) return null
         val original = KeyboardEditingRules.currentWord(contextBefore()) ?: return null
         val candidate = currentSuggestions.firstOrNull { it.automaticallyReplaces }
             ?.takeIf { suggestionWord.equals(original, ignoreCase = true) }
@@ -269,12 +327,31 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     private fun updateAfterDocumentChange() {
-        keyboardView?.updateAutomaticShift(KeyboardEditingRules.shouldCapitalize(contextBefore()))
+        updateAutomaticShift()
         refreshSuggestions()
     }
 
+    private fun updateAutomaticShift() {
+        val shouldShift = when (fieldProfile.capitalization) {
+            KeyboardCapitalization.NONE -> false
+            KeyboardCapitalization.WORDS -> KeyboardEditingRules.shouldCapitalizeWord(contextBefore())
+            KeyboardCapitalization.SENTENCES -> KeyboardEditingRules.shouldCapitalize(contextBefore())
+            KeyboardCapitalization.ALL_CHARACTERS -> true
+        }
+        keyboardView?.updateAutomaticShift(
+            shouldShift = shouldShift,
+            lockAutomatically = fieldProfile.capitalization == KeyboardCapitalization.ALL_CHARACTERS,
+        )
+    }
+
+    private fun clearDictationUndo() {
+        if (lastDictationInsertion == null) return
+        lastDictationInsertion = null
+        keyboardView?.updateUndoDictationAvailability(false)
+    }
+
     private fun refreshSuggestions() {
-        if (sensitiveField || !preferences.autocorrectionEnabled) {
+        if (!fieldProfile.allowsSuggestions || !preferences.autocorrectionEnabled) {
             currentSuggestions = emptyList()
             suggestionWord = null
             keyboardView?.updateSuggestions(emptyList())
@@ -304,14 +381,6 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     private fun contextBefore() = currentInputConnection?.getTextBeforeCursor(256, 0)
     private fun contextAfter() = currentInputConnection?.getTextAfterCursor(64, 0)
-
-    private fun isSensitiveInputType(inputType: Int): Boolean {
-        val variation = inputType and InputType.TYPE_MASK_VARIATION
-        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
-            variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-    }
 
     private data class AppliedCorrection(
         val original: String,

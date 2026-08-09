@@ -6,14 +6,20 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.AudioManager
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.accessibility.AccessibilityEvent
+import androidx.core.view.ViewCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+import androidx.customview.widget.ExploreByTouchHelper
 import com.sohail.scribe.core.KeyboardEditingRules
 import com.sohail.scribe.core.KeyboardPreferences
 import com.sohail.scribe.speech.SpeechSessionState
@@ -22,6 +28,7 @@ import kotlin.math.hypot
 interface KeyboardActionListener {
     fun onText(text: String, isLetter: Boolean = false)
     fun onDelete()
+    fun onDeleteWord()
     fun onSpace()
     fun onEnter()
     fun onMoveCursor(characters: Int)
@@ -30,12 +37,13 @@ interface KeyboardActionListener {
     fun onNextInputMethod()
     fun onToggleDictation()
     fun onCancelDictation()
+    fun onUndoDictation()
 }
 
-private enum class KeyboardPage { LETTERS, NUMBERS, SYMBOLS }
+private enum class KeyboardPage { LETTERS, NUMBERS, SYMBOLS, NUMBER_PAD, PHONE_PAD }
 private enum class ShiftState { OFF, ONCE, LOCKED }
 private enum class KeyKind {
-    TEXT, SHIFT, DELETE, SPACE, ENTER, MODE, MORE_SYMBOLS, NEXT_INPUT, MICROPHONE, CANCEL, SUGGESTION
+    TEXT, SHIFT, DELETE, SPACE, ENTER, MODE, MORE_SYMBOLS, NEXT_INPUT, MICROPHONE, CANCEL, UNDO, SUGGESTION
 }
 
 private data class KeySpec(
@@ -73,7 +81,9 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private var shift = ShiftState.ONCE
     private var lastShiftTapMillis = 0L
     private var preferences = KeyboardPreferences()
+    private var fieldProfile = KeyboardFieldProfile()
     private var suggestions: List<CorrectionCandidate> = emptyList()
+    private var undoDictationAvailable = false
     private var speechState = SpeechSessionState.IDLE
     private var speechMessage = "Dictate"
     private var partialTranscript = ""
@@ -83,10 +93,59 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private var downY = 0f
     private var alternateArmed = false
     private var deleteRepeated = false
+    private var deleteRepeatCount = 0
     private var isSwiping = false
     private var cursorSteps = 0
     private var punctuationPopupVisible = false
     private var selectedPunctuation: String? = null
+    private val accessibilityHelper = object : ExploreByTouchHelper(this) {
+        override fun getVirtualViewAt(x: Float, y: Float): Int =
+            keys.indexOfLast { it.rect.contains(x, y) }.takeIf { it >= 0 } ?: INVALID_ID
+
+        override fun getVisibleVirtualViews(virtualViewIds: MutableList<Int>) {
+            keys.indices.forEach(virtualViewIds::add)
+        }
+
+        override fun onPopulateNodeForVirtualView(
+            virtualViewId: Int,
+            node: AccessibilityNodeInfoCompat,
+        ) {
+            val key = keys.getOrNull(virtualViewId) ?: return
+            node.className = "android.widget.Button"
+            node.contentDescription = accessibleLabel(key)
+            node.setBoundsInParent(
+                Rect(key.rect.left.toInt(), key.rect.top.toInt(), key.rect.right.toInt(), key.rect.bottom.toInt()),
+            )
+            node.isClickable = true
+            node.isEnabled = true
+            node.addAction(AccessibilityNodeInfoCompat.ACTION_CLICK)
+            if (key.alternate != null) {
+                node.isLongClickable = true
+                node.addAction(AccessibilityNodeInfoCompat.ACTION_LONG_CLICK)
+            }
+        }
+
+        override fun onPerformActionForVirtualView(
+            virtualViewId: Int,
+            action: Int,
+            arguments: Bundle?,
+        ): Boolean {
+            val key = keys.getOrNull(virtualViewId) ?: return false
+            return when (action) {
+                AccessibilityNodeInfoCompat.ACTION_CLICK -> {
+                    commitKey(key)
+                    sendEventForVirtualView(virtualViewId, AccessibilityEvent.TYPE_VIEW_CLICKED)
+                    true
+                }
+                AccessibilityNodeInfoCompat.ACTION_LONG_CLICK -> key.alternate?.let {
+                    listener?.onText(it)
+                    sendEventForVirtualView(virtualViewId, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED)
+                    true
+                } ?: false
+                else -> false
+            }
+        }
+    }
 
     private val alternateRunnable = Runnable {
         val key = currentKey ?: return@Runnable
@@ -100,9 +159,19 @@ class ScribeKeyboardView(context: Context) : View(context) {
         override fun run() {
             if (currentKey?.kind != KeyKind.DELETE) return
             deleteRepeated = true
-            listener?.onDelete()
+            if (deleteRepeatCount < 18) {
+                listener?.onDelete()
+                deleteRepeatCount += 1
+            } else {
+                listener?.onDeleteWord()
+            }
             feedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            handler.postDelayed(this, 55L)
+            val nextDelay = when {
+                deleteRepeatCount >= 18 -> 280L
+                deleteRepeatCount > 8 -> 80L
+                else -> 110L
+            }
+            handler.postDelayed(this, nextDelay)
         }
     }
     private val punctuationRunnable = Runnable {
@@ -117,11 +186,28 @@ class ScribeKeyboardView(context: Context) : View(context) {
     init {
         isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        contentDescription = "Scribe keyboard"
+        ViewCompat.setAccessibilityDelegate(this, accessibilityHelper)
     }
 
     fun updatePreferences(value: KeyboardPreferences) {
         preferences = value.normalized()
+        invalidate()
+    }
+
+    fun updateFieldProfile(value: KeyboardFieldProfile) {
+        fieldProfile = value
+        page = when (value.layout) {
+            KeyboardFieldLayout.NUMBER -> KeyboardPage.NUMBER_PAD
+            KeyboardFieldLayout.PHONE -> KeyboardPage.PHONE_PAD
+            else -> KeyboardPage.LETTERS
+        }
+        shift = if (value.capitalization == KeyboardCapitalization.ALL_CHARACTERS) {
+            ShiftState.LOCKED
+        } else {
+            ShiftState.OFF
+        }
+        rebuildKeys(width, height)
+        accessibilityHelper.invalidateRoot()
         invalidate()
     }
 
@@ -131,7 +217,23 @@ class ScribeKeyboardView(context: Context) : View(context) {
         invalidate()
     }
 
-    fun updateAutomaticShift(shouldShift: Boolean) {
+    fun updateUndoDictationAvailability(available: Boolean) {
+        undoDictationAvailable = available
+        rebuildKeys(width, height)
+        invalidate()
+    }
+
+    fun updateAutomaticShift(shouldShift: Boolean, lockAutomatically: Boolean = false) {
+        if (!fieldProfile.allowsShift) {
+            shift = ShiftState.OFF
+            return
+        }
+        if (lockAutomatically) {
+            shift = ShiftState.LOCKED
+            rebuildKeys(width, height)
+            invalidate()
+            return
+        }
         if (shift != ShiftState.LOCKED) {
             shift = if (shouldShift) ShiftState.ONCE else ShiftState.OFF
             rebuildKeys(width, height)
@@ -164,6 +266,17 @@ class ScribeKeyboardView(context: Context) : View(context) {
         rebuildKeys(w, h)
     }
 
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean =
+        accessibilityHelper.dispatchHoverEvent(event) || super.dispatchHoverEvent(event)
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
+        accessibilityHelper.dispatchKeyEvent(event) || super.dispatchKeyEvent(event)
+
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        accessibilityHelper.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val dark = isDarkMode()
@@ -192,6 +305,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         val text = when {
             partialTranscript.isNotBlank() && speechState != SpeechSessionState.IDLE -> partialTranscript
             speechState != SpeechSessionState.IDLE -> speechMessage
+            fieldProfile.sensitive -> "Private field — dictation and suggestions off"
             else -> ""
         }
         if (text.isNotBlank()) {
@@ -244,11 +358,21 @@ class ScribeKeyboardView(context: Context) : View(context) {
         key.kind == KeyKind.SHIFT && shift == ShiftState.LOCKED -> "⇪"
         key.kind == KeyKind.SHIFT -> "⇧"
         key.kind == KeyKind.DELETE -> "⌫"
-        key.kind == KeyKind.ENTER -> "↵"
+        key.kind == KeyKind.ENTER && key.label == KeyboardReturnAction.RETURN.label -> "↵"
+        key.kind == KeyKind.ENTER -> key.label
         key.kind == KeyKind.NEXT_INPUT -> "◉"
         key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.LISTENING -> "■"
         key.kind == KeyKind.MICROPHONE -> "●"
         else -> key.label
+    }
+
+    private fun accessibleLabel(key: KeySpec): String {
+        val visible = when {
+            key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.LISTENING -> "Stop"
+            key.kind == KeyKind.ENTER -> fieldProfile.returnAction.label
+            else -> key.label
+        }
+        return KeyboardAccessibilityLabels.labelFor(key.id, visible, key.alternate)
     }
 
     private fun drawSwipeTrail(canvas: Canvas) {
@@ -324,6 +448,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         cursorSteps = 0
         alternateArmed = false
         deleteRepeated = false
+        deleteRepeatCount = 0
         isSwiping = false
         swipePoints.clear()
         swipeKeys.clear()
@@ -331,7 +456,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         selectedPunctuation = null
         val key = currentKey ?: return
         feedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        if (key.kind == KeyKind.DELETE) handler.postDelayed(deleteRepeatRunnable, 380L)
+        if (key.kind == KeyKind.DELETE) handler.postDelayed(deleteRepeatRunnable, 450L)
         if (key.alternate != null) handler.postDelayed(alternateRunnable, preferences.alternateHoldDelayMillis.toLong())
         if (key.id == "period") handler.postDelayed(punctuationRunnable, 380L)
         if (key.kind == KeyKind.TEXT && key.output?.singleOrNull()?.isLetter() == true) {
@@ -432,6 +557,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
             KeyKind.NEXT_INPUT -> listener?.onNextInputMethod()
             KeyKind.MICROPHONE -> listener?.onToggleDictation()
             KeyKind.CANCEL -> listener?.onCancelDictation()
+            KeyKind.UNDO -> listener?.onUndoDictation()
             KeyKind.SUGGESTION -> key.candidate?.let { listener?.onSuggestion(it) }
         }
         rebuildKeys(width, height)
@@ -461,19 +587,22 @@ class ScribeKeyboardView(context: Context) : View(context) {
             KeyboardPage.LETTERS -> buildLetterRows(viewWidth, top, rowHeight, rowGap)
             KeyboardPage.NUMBERS -> buildSymbolRows(viewWidth, top, rowHeight, rowGap, false)
             KeyboardPage.SYMBOLS -> buildSymbolRows(viewWidth, top, rowHeight, rowGap, true)
+            KeyboardPage.NUMBER_PAD -> buildNumberPad(viewWidth, top, rowHeight, rowGap)
+            KeyboardPage.PHONE_PAD -> buildPhonePad(viewWidth, top, rowHeight, rowGap)
         }
+        accessibilityHelper.invalidateRoot()
     }
 
     private fun buildToolbar(viewWidth: Int) {
         val top = dp(5f)
         val bottom = toolbarHeight() - dp(5f)
-        val micWidth = dp(62f)
+        val micWidth = if (fieldProfile.allowsDictation) dp(62f) else 0f
         val gap = dp(6f)
         val micLeft = viewWidth - dp(6f) - micWidth
         val active = speechState == SpeechSessionState.LISTENING || speechState == SpeechSessionState.PROCESSING
         if (active) {
             keys += KeySpec("cancel", "Cancel", kind = KeyKind.CANCEL, rect = RectF(dp(6f), top, dp(72f), bottom))
-        } else {
+        } else if (suggestions.isNotEmpty()) {
             val candidateWidth = (micLeft - dp(12f) - gap * 2f) / 3f
             suggestions.take(3).forEachIndexed { index, suggestion ->
                 val left = dp(6f) + index * (candidateWidth + gap)
@@ -485,13 +614,22 @@ class ScribeKeyboardView(context: Context) : View(context) {
                     candidate = suggestion,
                 )
             }
+        } else if (undoDictationAvailable) {
+            keys += KeySpec(
+                id = "undo-dictation",
+                label = "Undo dictation",
+                kind = KeyKind.UNDO,
+                rect = RectF(dp(6f), top, micLeft - gap, bottom),
+            )
         }
-        keys += KeySpec(
-            id = "microphone",
-            label = "Dictate",
-            kind = KeyKind.MICROPHONE,
-            rect = RectF(micLeft, top, viewWidth - dp(6f), bottom),
-        )
+        if (fieldProfile.allowsDictation) {
+            keys += KeySpec(
+                id = "microphone",
+                label = "Dictate",
+                kind = KeyKind.MICROPHONE,
+                rect = RectF(micLeft, top, viewWidth - dp(6f), bottom),
+            )
+        }
     }
 
     private fun buildLetterRows(viewWidth: Int, top: Float, rowHeight: Float, rowGap: Float) {
@@ -547,6 +685,57 @@ class ScribeKeyboardView(context: Context) : View(context) {
         addBottomRow(viewWidth, top + (rowHeight + rowGap) * 3f, rowHeight, "ABC")
     }
 
+    private fun buildNumberPad(viewWidth: Int, top: Float, rowHeight: Float, rowGap: Float) {
+        addTextRow(listOf("1", "2", "3"), viewWidth, top, rowHeight, viewWidth * 0.19f)
+        addTextRow(listOf("4", "5", "6"), viewWidth, top + rowHeight + rowGap, rowHeight, viewWidth * 0.19f)
+        addTextRow(listOf("7", "8", "9"), viewWidth, top + (rowHeight + rowGap) * 2f, rowHeight, viewWidth * 0.19f)
+        val extras = buildList {
+            if (fieldProfile.signedNumber) add("-")
+            add("0")
+            if (fieldProfile.decimalNumber) add(".")
+        }
+        addPadBottomRow(viewWidth, top + (rowHeight + rowGap) * 3f, rowHeight, extras)
+    }
+
+    private fun buildPhonePad(viewWidth: Int, top: Float, rowHeight: Float, rowGap: Float) {
+        addTextRow(listOf("1", "2", "3"), viewWidth, top, rowHeight, viewWidth * 0.19f)
+        addTextRow(listOf("4", "5", "6"), viewWidth, top + rowHeight + rowGap, rowHeight, viewWidth * 0.19f)
+        addTextRow(listOf("7", "8", "9"), viewWidth, top + (rowHeight + rowGap) * 2f, rowHeight, viewWidth * 0.19f)
+        addPadBottomRow(viewWidth, top + (rowHeight + rowGap) * 3f, rowHeight, listOf("*", "0", "#", "+"))
+    }
+
+    private fun addPadBottomRow(viewWidth: Int, top: Float, rowHeight: Float, values: List<String>) {
+        val gap = dp(5f)
+        val inset = dp(4f)
+        val nextWidth = dp(42f)
+        val deleteWidth = dp(52f)
+        val returnWidth = dp(64f)
+        var left = inset
+        keys += KeySpec("next", "Next", kind = KeyKind.NEXT_INPUT, rect = RectF(left, top, left + nextWidth, top + rowHeight))
+        left += nextWidth + gap
+        val controlsWidth = deleteWidth + returnWidth + gap * 2f
+        val available = viewWidth - left - inset - controlsWidth
+        val valueWidth = (available - gap * (values.size - 1).coerceAtLeast(0)) / values.size.coerceAtLeast(1)
+        values.forEachIndexed { index, value ->
+            val valueLeft = left + index * (valueWidth + gap)
+            keys += KeySpec(
+                id = if (value == ".") "period" else "pad-$value-$index",
+                label = value,
+                output = value,
+                rect = RectF(valueLeft, top, valueLeft + valueWidth, top + rowHeight),
+            )
+        }
+        left += available + gap
+        keys += KeySpec("delete", "Delete", kind = KeyKind.DELETE, rect = RectF(left, top, left + deleteWidth, top + rowHeight))
+        left += deleteWidth + gap
+        keys += KeySpec(
+            "return",
+            fieldProfile.returnAction.label,
+            kind = KeyKind.ENTER,
+            rect = RectF(left, top, viewWidth - inset, top + rowHeight),
+        )
+    }
+
     private fun addTextRow(values: List<String>, viewWidth: Int, top: Float, rowHeight: Float, inset: Float) {
         val gap = dp(5f)
         val keyWidth = (viewWidth - inset * 2f - gap * (values.size - 1)) / values.size
@@ -576,9 +765,24 @@ class ScribeKeyboardView(context: Context) : View(context) {
         val spaceRight = viewWidth - inset - returnWidth - gap - punctuationWidth - gap
         keys += KeySpec("space", "space", kind = KeyKind.SPACE, rect = RectF(left, top, spaceRight, top + rowHeight))
         left = spaceRight + gap
-        keys += KeySpec("period", ".", output = ".", rect = RectF(left, top, left + punctuationWidth, top + rowHeight))
+        val punctuation = when (fieldProfile.layout) {
+            KeyboardFieldLayout.EMAIL -> "@"
+            KeyboardFieldLayout.URI -> "/"
+            else -> "."
+        }
+        keys += KeySpec(
+            if (punctuation == ".") "period" else "field-punctuation",
+            punctuation,
+            output = punctuation,
+            rect = RectF(left, top, left + punctuationWidth, top + rowHeight),
+        )
         left += punctuationWidth + gap
-        keys += KeySpec("return", "return", kind = KeyKind.ENTER, rect = RectF(left, top, viewWidth - inset, top + rowHeight))
+        keys += KeySpec(
+            "return",
+            fieldProfile.returnAction.label,
+            kind = KeyKind.ENTER,
+            rect = RectF(left, top, viewWidth - inset, top + rowHeight),
+        )
     }
 
     private fun punctuationPopupRect(period: KeySpec): RectF {

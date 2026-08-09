@@ -16,11 +16,34 @@ object KeyboardEditingRules {
         return lastNonWhitespace in ".!?"
     }
 
+    fun shouldCapitalizeWord(contextBefore: CharSequence?): Boolean =
+        contextBefore.isNullOrEmpty() || contextBefore.last().isWhitespace()
+
     fun shouldReplaceDoubleSpace(contextBefore: CharSequence?): Boolean {
         val text = contextBefore?.toString() ?: return false
         if (!text.endsWith(" ")) return false
         val preceding = text.dropLast(1).lastOrNull() ?: return false
         return preceding.isLetterOrDigit() || preceding in ")]}'\"”’"
+    }
+
+    fun deleteWordCodePointCount(contextBefore: CharSequence?): Int {
+        val text = contextBefore?.toString().orEmpty()
+        if (text.isEmpty()) return 1
+        var index = text.length
+        var count = 0
+        while (index > 0) {
+            val codePoint = Character.codePointBefore(text, index)
+            if (!Character.isWhitespace(codePoint)) break
+            index -= Character.charCount(codePoint)
+            count += 1
+        }
+        while (index > 0) {
+            val codePoint = Character.codePointBefore(text, index)
+            if (Character.isWhitespace(codePoint)) break
+            index -= Character.charCount(codePoint)
+            count += 1
+        }
+        return count.coerceAtLeast(1)
     }
 
     fun shouldReturnToLetters(
