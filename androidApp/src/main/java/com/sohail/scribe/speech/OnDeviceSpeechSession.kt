@@ -28,6 +28,21 @@ object OnDeviceModelPolicy {
     }
 }
 
+internal class SpeechCallbackGate {
+    private var generation = 0L
+
+    fun begin(): Long {
+        generation += 1
+        return generation
+    }
+
+    fun invalidate() {
+        generation += 1
+    }
+
+    fun accepts(token: Long): Boolean = token == generation
+}
+
 interface SpeechSessionListener {
     fun onStateChanged(state: SpeechSessionState, message: String) = Unit
     fun onAudioLevel(level: Float) = Unit
@@ -41,6 +56,7 @@ class OnDeviceSpeechSession(
     private val modelStatusListener: (OnDeviceModelStatus) -> Unit = {},
 ) : RecognitionListener {
     private val appContext = context.applicationContext
+    private val callbackGate = SpeechCallbackGate()
     private var recognizer: SpeechRecognizer? = null
     private var receivedFinalResult = false
 
@@ -59,21 +75,40 @@ class OnDeviceSpeechSession(
         destroyRecognizer()
         receivedFinalResult = false
         listener.onStateChanged(SpeechSessionState.PREPARING, "Starting private on-device recognition…")
-        recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also {
-            it.setRecognitionListener(this)
-            it.startListening(recognizerIntent(languageTag))
+        val token = callbackGate.begin()
+        try {
+            val activeRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
+            recognizer = activeRecognizer
+            activeRecognizer.setRecognitionListener(gatedRecognitionListener(token))
+            activeRecognizer.startListening(recognizerIntent(languageTag))
+        } catch (error: RuntimeException) {
+            destroyRecognizer(token)
+            listener.onStateChanged(SpeechSessionState.FAILED, startFailureMessage(error))
         }
     }
 
     fun stop() {
         checkMainThread()
-        listener.onStateChanged(SpeechSessionState.PROCESSING, "Finishing your words…")
-        recognizer?.stopListening()
+        val activeRecognizer = recognizer ?: return
+        try {
+            listener.onStateChanged(SpeechSessionState.PROCESSING, "Finishing your words…")
+            activeRecognizer.stopListening()
+        } catch (_: RuntimeException) {
+            destroyRecognizer()
+            listener.onStateChanged(
+                SpeechSessionState.FAILED,
+                "Scribe couldn't stop private on-device recognition cleanly. Try again.",
+            )
+        }
     }
 
     fun cancel() {
         checkMainThread()
-        recognizer?.cancel()
+        try {
+            recognizer?.cancel()
+        } catch (_: RuntimeException) {
+            // The recognizer may already have torn itself down after a terminal callback.
+        }
         destroyRecognizer()
         listener.onStateChanged(SpeechSessionState.IDLE, "Ready")
     }
@@ -82,54 +117,67 @@ class OnDeviceSpeechSession(
         checkMainThread()
         if (Build.VERSION.SDK_INT < 33 || !isAvailable) return false
         destroyRecognizer()
-        val downloadRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also {
-            it.setRecognitionListener(this)
-        }
-        recognizer = downloadRecognizer
-        val intent = recognizerIntent(languageTag)
-        if (Build.VERSION.SDK_INT >= 34) {
-            modelStatusListener(OnDeviceModelStatus.DOWNLOADING)
-            listener.onStateChanged(SpeechSessionState.PREPARING, "Requesting the on-device language model…")
-            downloadRecognizer.triggerModelDownload(
-                intent,
-                appContext.mainExecutor,
-                object : ModelDownloadListener {
-                    override fun onProgress(completedPercent: Int) {
-                        modelStatusListener(OnDeviceModelStatus.DOWNLOADING)
-                        listener.onStateChanged(
-                            SpeechSessionState.PREPARING,
-                            "Downloading the on-device language model… ${completedPercent.coerceIn(0, 100)}%",
-                        )
-                    }
+        val token = callbackGate.begin()
+        try {
+            val downloadRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
+            recognizer = downloadRecognizer
+            downloadRecognizer.setRecognitionListener(gatedRecognitionListener(token))
+            val intent = recognizerIntent(languageTag)
+            if (Build.VERSION.SDK_INT >= 34) {
+                modelStatusListener(OnDeviceModelStatus.DOWNLOADING)
+                listener.onStateChanged(SpeechSessionState.PREPARING, "Requesting the on-device language model…")
+                downloadRecognizer.triggerModelDownload(
+                    intent,
+                    appContext.mainExecutor,
+                    object : ModelDownloadListener {
+                        override fun onProgress(completedPercent: Int) {
+                            if (!callbackGate.accepts(token)) return
+                            modelStatusListener(OnDeviceModelStatus.DOWNLOADING)
+                            listener.onStateChanged(
+                                SpeechSessionState.PREPARING,
+                                "Downloading the on-device language model… ${completedPercent.coerceIn(0, 100)}%",
+                            )
+                        }
 
-                    override fun onSuccess() {
-                        destroyRecognizer()
-                        modelStatusListener(OnDeviceModelStatus.READY)
-                        listener.onStateChanged(SpeechSessionState.IDLE, "On-device language model ready")
-                    }
+                        override fun onSuccess() {
+                            if (!callbackGate.accepts(token)) return
+                            destroyRecognizer(token)
+                            modelStatusListener(OnDeviceModelStatus.READY)
+                            listener.onStateChanged(SpeechSessionState.IDLE, "On-device language model ready")
+                        }
 
-                    override fun onScheduled() {
-                        destroyRecognizer()
-                        modelStatusListener(OnDeviceModelStatus.PENDING)
-                        listener.onStateChanged(
-                            SpeechSessionState.IDLE,
-                            "On-device model download scheduled by Android",
-                        )
-                    }
+                        override fun onScheduled() {
+                            if (!callbackGate.accepts(token)) return
+                            destroyRecognizer(token)
+                            modelStatusListener(OnDeviceModelStatus.PENDING)
+                            listener.onStateChanged(
+                                SpeechSessionState.IDLE,
+                                "On-device model download scheduled by Android",
+                            )
+                        }
 
-                    override fun onError(error: Int) {
-                        destroyRecognizer()
-                        modelStatusListener(OnDeviceModelStatus.UNKNOWN)
-                        listener.onStateChanged(SpeechSessionState.FAILED, errorMessage(error))
-                    }
-                },
-            )
-        } else {
-            downloadRecognizer.triggerModelDownload(intent)
-            modelStatusListener(OnDeviceModelStatus.PENDING)
+                        override fun onError(error: Int) {
+                            if (!callbackGate.accepts(token)) return
+                            destroyRecognizer(token)
+                            modelStatusListener(OnDeviceModelStatus.UNKNOWN)
+                            listener.onStateChanged(SpeechSessionState.FAILED, errorMessage(error))
+                        }
+                    },
+                )
+            } else {
+                downloadRecognizer.triggerModelDownload(intent)
+                modelStatusListener(OnDeviceModelStatus.PENDING)
+                listener.onStateChanged(
+                    SpeechSessionState.IDLE,
+                    "On-device model download requested in Android",
+                )
+            }
+        } catch (_: RuntimeException) {
+            destroyRecognizer(token)
+            modelStatusListener(OnDeviceModelStatus.UNKNOWN)
             listener.onStateChanged(
-                SpeechSessionState.IDLE,
-                "On-device model download requested in Android",
+                SpeechSessionState.FAILED,
+                "Android couldn't start the on-device model download. Try again.",
             )
         }
         return true
@@ -147,29 +195,37 @@ class OnDeviceSpeechSession(
         }
         destroyRecognizer()
         modelStatusListener(OnDeviceModelStatus.CHECKING)
-        val supportRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
-        recognizer = supportRecognizer
-        supportRecognizer.setRecognitionListener(this)
-        supportRecognizer.checkRecognitionSupport(
-            recognizerIntent(languageTag),
-            appContext.mainExecutor,
-            object : RecognitionSupportCallback {
-                override fun onSupportResult(recognitionSupport: RecognitionSupport) {
-                    val status = OnDeviceModelPolicy.status(
-                        recognitionSupport.installedOnDeviceLanguages,
-                        recognitionSupport.pendingOnDeviceLanguages,
-                        recognitionSupport.supportedOnDeviceLanguages,
-                    )
-                    destroyRecognizer()
-                    modelStatusListener(status)
-                }
+        val token = callbackGate.begin()
+        try {
+            val supportRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
+            recognizer = supportRecognizer
+            supportRecognizer.setRecognitionListener(gatedRecognitionListener(token))
+            supportRecognizer.checkRecognitionSupport(
+                recognizerIntent(languageTag),
+                appContext.mainExecutor,
+                object : RecognitionSupportCallback {
+                    override fun onSupportResult(recognitionSupport: RecognitionSupport) {
+                        if (!callbackGate.accepts(token)) return
+                        val status = OnDeviceModelPolicy.status(
+                            recognitionSupport.installedOnDeviceLanguages,
+                            recognitionSupport.pendingOnDeviceLanguages,
+                            recognitionSupport.supportedOnDeviceLanguages,
+                        )
+                        destroyRecognizer(token)
+                        modelStatusListener(status)
+                    }
 
-                override fun onError(error: Int) {
-                    destroyRecognizer()
-                    modelStatusListener(OnDeviceModelStatus.UNKNOWN)
-                }
-            },
-        )
+                    override fun onError(error: Int) {
+                        if (!callbackGate.accepts(token)) return
+                        destroyRecognizer(token)
+                        modelStatusListener(OnDeviceModelStatus.UNKNOWN)
+                    }
+                },
+            )
+        } catch (_: RuntimeException) {
+            destroyRecognizer(token)
+            modelStatusListener(OnDeviceModelStatus.UNKNOWN)
+        }
     }
 
     fun destroy() {
@@ -232,9 +288,58 @@ class OnDeviceSpeechSession(
         ?.firstOrNull()
         .orEmpty()
 
-    private fun destroyRecognizer() {
-        recognizer?.destroy()
+    private fun gatedRecognitionListener(token: Long) = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) = forward(token) {
+            this@OnDeviceSpeechSession.onReadyForSpeech(params)
+        }
+
+        override fun onBeginningOfSpeech() = forward(token) {
+            this@OnDeviceSpeechSession.onBeginningOfSpeech()
+        }
+
+        override fun onRmsChanged(rmsdB: Float) = forward(token) {
+            this@OnDeviceSpeechSession.onRmsChanged(rmsdB)
+        }
+
+        override fun onBufferReceived(buffer: ByteArray?) = forward(token) {
+            this@OnDeviceSpeechSession.onBufferReceived(buffer)
+        }
+
+        override fun onEndOfSpeech() = forward(token) {
+            this@OnDeviceSpeechSession.onEndOfSpeech()
+        }
+
+        override fun onError(error: Int) = forward(token) {
+            this@OnDeviceSpeechSession.onError(error)
+        }
+
+        override fun onResults(results: Bundle?) = forward(token) {
+            this@OnDeviceSpeechSession.onResults(results)
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) = forward(token) {
+            this@OnDeviceSpeechSession.onPartialResults(partialResults)
+        }
+
+        override fun onEvent(eventType: Int, params: Bundle?) = forward(token) {
+            this@OnDeviceSpeechSession.onEvent(eventType, params)
+        }
+    }
+
+    private inline fun forward(token: Long, callback: () -> Unit) {
+        if (callbackGate.accepts(token)) callback()
+    }
+
+    private fun destroyRecognizer(expectedToken: Long? = null) {
+        if (expectedToken != null && !callbackGate.accepts(expectedToken)) return
+        callbackGate.invalidate()
+        val recognizerToDestroy = recognizer
         recognizer = null
+        try {
+            recognizerToDestroy?.destroy()
+        } catch (_: RuntimeException) {
+            // Destruction is best-effort; ownership has already been invalidated locally.
+        }
     }
 
     private fun checkMainThread() {
@@ -242,6 +347,13 @@ class OnDeviceSpeechSession(
             "SpeechRecognizer must be used on the main thread"
         }
     }
+
+    private fun startFailureMessage(error: RuntimeException): String =
+        if (error is SecurityException) {
+            "Allow microphone access in Scribe first."
+        } else {
+            "Scribe couldn't start private on-device recognition. Try again."
+        }
 
     private fun errorMessage(error: Int): String = when (error) {
         SpeechRecognizer.ERROR_AUDIO -> "Scribe couldn't access microphone audio."

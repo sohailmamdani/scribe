@@ -51,7 +51,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 8, the repository has local automated evidence for:
+As of Android `versionCode` 9, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -92,8 +92,10 @@ As of Android `versionCode` 8, the repository has local automated evidence for:
   that honors alternate-symbol enablement, the configured hold delay, and the
   selected return-to-letters scope;
 - the API 34 model-download progress/success/scheduled/error contract, with an
-  API 33 fallback and explicit installed/pending/downloadable model states;
-- all 52 Android unit tests, all 16 instrumentation tests on an API 36 emulator,
+  API 33 fallback, explicit installed/pending/downloadable model states, and
+  generation-gated callbacks so stale support/download work cannot end a new
+  dictation session;
+- all 53 Android unit tests, all 16 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with
