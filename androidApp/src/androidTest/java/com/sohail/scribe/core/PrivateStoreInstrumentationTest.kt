@@ -42,4 +42,24 @@ class PrivateStoreInstrumentationTest {
         store.clear()
         assertEquals(emptyList<DictationHistoryItem>(), store.load())
     }
+
+    @Test fun recoverableDictationPersistsConsumesDiscardsAndExpires() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        var now = 1_000_000L
+        val store = RecoverableDictationStore(context) { now }
+        store.discard()
+
+        store.save(" finished words ")
+        assertEquals("finished words", RecoverableDictationStore(context) { now }.load())
+        assertEquals("finished words", store.consume())
+        assertEquals(null, store.load())
+
+        store.save("discard me")
+        store.discard()
+        assertEquals(null, store.load())
+
+        store.save("expired words")
+        now += 15 * 60 * 1_000L + 1
+        assertEquals(null, store.load())
+    }
 }

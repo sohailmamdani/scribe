@@ -39,13 +39,16 @@ interface KeyboardActionListener {
     fun onToggleDictation()
     fun onCancelDictation()
     fun onUndoDictation()
+    fun onInsertRecoveredDictation()
+    fun onDiscardRecoveredDictation()
 }
 
 private enum class KeyboardPage { LETTERS, NUMBERS, SYMBOLS, NUMBER_PAD, PHONE_PAD }
 private enum class ShiftState { OFF, ONCE, LOCKED }
 private enum class KeyKind {
     TEXT, SHIFT, DELETE, SPACE, ENTER, MODE, MORE_SYMBOLS, NEXT_INPUT, MICROPHONE, CANCEL,
-    UNDO_DICTATION, UNDO_AUTOCORRECTION, SUGGESTION
+    UNDO_DICTATION, UNDO_AUTOCORRECTION, SUGGESTION, INSERT_RECOVERED_DICTATION,
+    DISCARD_RECOVERED_DICTATION
 }
 
 private data class KeySpec(
@@ -89,6 +92,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private var fieldProfile = KeyboardFieldProfile()
     private var suggestions: List<CorrectionCandidate> = emptyList()
     private var undoDictationAvailable = false
+    private var recoverableDictationAvailable = false
     private var autocorrectionUndoOriginal: String? = null
     private var speechState = SpeechSessionState.IDLE
     private var speechMessage = "Dictate"
@@ -267,6 +271,13 @@ class ScribeKeyboardView(context: Context) : View(context) {
     fun updateUndoDictationAvailability(available: Boolean) {
         undoDictationAvailable = available
         rebuildKeys(width, height)
+        invalidate()
+    }
+
+    fun updateRecoverableDictationAvailability(available: Boolean) {
+        recoverableDictationAvailable = available
+        rebuildKeys(width, height)
+        accessibilityHelper.invalidateRoot()
         invalidate()
     }
 
@@ -679,6 +690,8 @@ class ScribeKeyboardView(context: Context) : View(context) {
             KeyKind.MICROPHONE -> listener?.onToggleDictation()
             KeyKind.CANCEL -> listener?.onCancelDictation()
             KeyKind.UNDO_DICTATION -> listener?.onUndoDictation()
+            KeyKind.INSERT_RECOVERED_DICTATION -> listener?.onInsertRecoveredDictation()
+            KeyKind.DISCARD_RECOVERED_DICTATION -> listener?.onDiscardRecoveredDictation()
             KeyKind.UNDO_AUTOCORRECTION -> listener?.onUndoAutocorrection()
             KeyKind.SUGGESTION -> key.candidate?.let { listener?.onSuggestion(it) }
         }
@@ -791,11 +804,17 @@ class ScribeKeyboardView(context: Context) : View(context) {
         val bottom = toolbarHeight() - dp(5f)
         val micWidth = if (fieldProfile.allowsDictation) dp(62f) else 0f
         val gap = dp(6f)
-        val micLeft = viewWidth - dp(6f) - micWidth
         val dictationControl = KeyboardDictationControlPolicy.control(speechState)
         val active = speechState == SpeechSessionState.PREPARING ||
             speechState == SpeechSessionState.LISTENING ||
             speechState == SpeechSessionState.PROCESSING
+        val showsRecoverableDictation = fieldProfile.allowsDictation &&
+            !active &&
+            autocorrectionUndoOriginal == null &&
+            suggestions.isEmpty() &&
+            recoverableDictationAvailable
+        val effectiveMicWidth = if (showsRecoverableDictation) 0f else micWidth
+        val micLeft = viewWidth - dp(6f) - effectiveMicWidth
         if (active) {
             keys += KeySpec("cancel", "Cancel", kind = KeyKind.CANCEL, rect = RectF(dp(6f), top, dp(72f), bottom))
         } else if (autocorrectionUndoOriginal != null) {
@@ -817,6 +836,20 @@ class ScribeKeyboardView(context: Context) : View(context) {
                     candidate = suggestion,
                 )
             }
+        } else if (showsRecoverableDictation) {
+            val discardWidth = dp(48f)
+            keys += KeySpec(
+                id = "discard-recovered-dictation",
+                label = "Discard",
+                kind = KeyKind.DISCARD_RECOVERED_DICTATION,
+                rect = RectF(dp(6f), top, dp(6f) + discardWidth, bottom),
+            )
+            keys += KeySpec(
+                id = "insert-recovered-dictation",
+                label = "Insert finished dictation",
+                kind = KeyKind.INSERT_RECOVERED_DICTATION,
+                rect = RectF(dp(6f) + discardWidth + gap, top, viewWidth - dp(6f), bottom),
+            )
         } else if (undoDictationAvailable) {
             keys += KeySpec(
                 id = "undo-dictation",
@@ -825,7 +858,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
                 rect = RectF(dp(6f), top, micLeft - gap, bottom),
             )
         }
-        if (fieldProfile.allowsDictation) {
+        if (fieldProfile.allowsDictation && !showsRecoverableDictation) {
             keys += KeySpec(
                 id = "microphone",
                 label = dictationControl.label,

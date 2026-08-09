@@ -2,6 +2,12 @@ package com.sohail.scribe.keyboard
 
 import com.sohail.scribe.speech.SpeechSessionState
 
+internal enum class KeyboardDictationResultDisposition {
+    CURRENT_INPUT,
+    RECOVERABLE,
+    REJECTED,
+}
+
 /**
  * Binds a keyboard dictation session to the editor that was active when it began.
  *
@@ -15,12 +21,10 @@ internal class KeyboardDictationInputGate {
 
     fun beginInput() {
         inputGeneration += 1
-        sessionInputGeneration = null
     }
 
     fun invalidateInput() {
         inputGeneration += 1
-        sessionInputGeneration = null
     }
 
     fun bindSession() {
@@ -34,16 +38,23 @@ internal class KeyboardDictationInputGate {
     fun acceptsCallback(allowsDictation: Boolean): Boolean =
         allowsDictation && sessionInputGeneration == inputGeneration
 
-    fun consumeResult(allowsDictation: Boolean): Boolean {
-        val accepted = acceptsCallback(allowsDictation)
+    fun hasSession(): Boolean = sessionInputGeneration != null
+
+    fun consumeResult(allowsDictation: Boolean): KeyboardDictationResultDisposition {
+        val sessionGeneration = sessionInputGeneration
+            ?: return KeyboardDictationResultDisposition.REJECTED
+        val disposition = if (allowsDictation && sessionGeneration == inputGeneration) {
+            KeyboardDictationResultDisposition.CURRENT_INPUT
+        } else {
+            KeyboardDictationResultDisposition.RECOVERABLE
+        }
         sessionInputGeneration = null
-        return accepted
+        return disposition
     }
 
     companion object {
         fun shouldCancel(state: SpeechSessionState): Boolean =
             state == SpeechSessionState.PREPARING ||
-                state == SpeechSessionState.LISTENING ||
-                state == SpeechSessionState.PROCESSING
+                state == SpeechSessionState.LISTENING
     }
 }

@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import com.sohail.scribe.core.DictationHistoryStore
 import com.sohail.scribe.core.KeyboardEditingRules
 import com.sohail.scribe.core.KeyboardPreferences
+import com.sohail.scribe.core.RecoverableDictationStore
 import com.sohail.scribe.core.ScribePreferences
 import com.sohail.scribe.core.TranscriptPolisher
 import com.sohail.scribe.speech.OnDeviceSpeechSession
@@ -31,6 +32,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private val dictationInputGate = KeyboardDictationInputGate()
     private lateinit var preferencesStore: ScribePreferences
     private lateinit var historyStore: DictationHistoryStore
+    private lateinit var recoverableDictationStore: RecoverableDictationStore
     private lateinit var correctionLearning: KeyboardCorrectionLearningStore
     private lateinit var userDictionary: AndroidUserDictionary
     private lateinit var speechSession: OnDeviceSpeechSession
@@ -44,6 +46,8 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private var fieldProfile = KeyboardFieldProfile()
     private var lastCorrection: AppliedCorrection? = null
     private var lastDictationInsertion: String? = null
+    private var recoverableDictation: String? = null
+    private var dictationAllowsHistory = false
     private val tapEvidence = mutableListOf<KeyboardTapEvidence?>()
     private var lastSpaceTapMillis: Long? = null
     private var speechMessage = "Dictate"
@@ -58,6 +62,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         super.onCreate()
         preferencesStore = ScribePreferences(this)
         historyStore = DictationHistoryStore(this)
+        recoverableDictationStore = RecoverableDictationStore(this)
         correctionLearning = KeyboardCorrectionLearningStore(this)
         userDictionary = AndroidUserDictionary(this)
         speechSession = OnDeviceSpeechSession(
@@ -83,6 +88,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         view.updateFieldProfile(fieldProfile)
         view.updateOffersInputModeSwitch(shouldOfferSwitchingToNextInputMethod())
         view.updateSpeechState(speechState, speechMessage, partialTranscript, audioLevel)
+        view.updateRecoverableDictationAvailability(
+            fieldProfile.allowsDictation && recoverableDictation != null,
+        )
         view.updateAutocorrectionUndoOriginal(lastCorrection?.original)
         updateAutomaticShift()
     }
@@ -92,13 +100,17 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
+        val keepsProcessingResult = speechState == SpeechSessionState.PROCESSING &&
+            dictationInputGate.hasSession()
         documentWorkGate.invalidate()
         dictationInputGate.beginInput()
         cancelInFlightDictation()
-        speechState = SpeechSessionState.IDLE
-        speechMessage = "Dictate"
-        partialTranscript = ""
-        audioLevel = 0f
+        if (!keepsProcessingResult) {
+            speechState = SpeechSessionState.IDLE
+            speechMessage = "Dictate"
+            partialTranscript = ""
+            audioLevel = 0f
+        }
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
@@ -108,6 +120,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
             inputType = info?.inputType ?: 0,
             imeOptions = info?.imeOptions ?: EditorInfo.IME_ACTION_NONE,
         )
+        recoverableDictation = recoverableDictationStore.load()
         selectionStart = info?.initialSelStart ?: -1
         selectionEnd = info?.initialSelEnd ?: -1
         markLocalMutation()
@@ -129,6 +142,9 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         keyboardView?.updateSpeechState(speechState, speechMessage, partialTranscript, audioLevel)
         keyboardView?.updateSuggestions(emptyList())
         keyboardView?.updateUndoDictationAvailability(false)
+        keyboardView?.updateRecoverableDictationAvailability(
+            fieldProfile.allowsDictation && recoverableDictation != null,
+        )
         keyboardView?.updateAutocorrectionUndoOriginal(null)
         updateAutomaticShift()
         refreshSuggestions()
@@ -411,6 +427,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                         acceptPendingCorrection()
                         tapEvidence.clear()
                         lastSpaceTapMillis = null
+                        dictationAllowsHistory = fieldProfile.allowsPersonalizedLearning
                         dictationInputGate.bindSession()
                         speechSession.start()
                     }
@@ -421,6 +438,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onCancelDictation() {
         dictationInputGate.clearSession()
+        dictationAllowsHistory = false
         speechSession.cancel()
     }
 
@@ -441,11 +459,56 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         }
     }
 
+    override fun onInsertRecoveredDictation() {
+        if (!fieldProfile.allowsDictation) return
+        val text = recoverableDictation ?: recoverableDictationStore.load() ?: return
+        val inputConnection = currentInputConnection ?: return
+        val insertion = TranscriptPolisher.textForInsertion(text, contextBefore(), contextAfter())
+        markLocalMutation()
+        inputConnection.commitText(insertion, 1)
+        recoverableDictationStore.discard()
+        recoverableDictation = null
+        tapEvidence.clear()
+        lastSpaceTapMillis = null
+        lastCorrection = null
+        lastDictationInsertion = insertion
+        keyboardView?.updateRecoverableDictationAvailability(false)
+        keyboardView?.updateUndoDictationAvailability(true)
+        updateAutocorrectionUndoAvailability()
+        updateAfterDocumentChange()
+    }
+
+    override fun onDiscardRecoveredDictation() {
+        recoverableDictationStore.discard()
+        recoverableDictation = null
+        keyboardView?.updateRecoverableDictationAvailability(false)
+    }
+
     override fun onStateChanged(state: SpeechSessionState, message: String) {
+        if (dictationInputGate.hasSession() &&
+            !dictationInputGate.acceptsCallback(fieldProfile.allowsDictation)
+        ) {
+            if (state == SpeechSessionState.IDLE || state == SpeechSessionState.FAILED) {
+                dictationInputGate.clearSession()
+                dictationAllowsHistory = false
+                speechState = SpeechSessionState.IDLE
+                speechMessage = "Dictate"
+                partialTranscript = ""
+                audioLevel = 0f
+                keyboardView?.updateSpeechState(
+                    speechState,
+                    speechMessage,
+                    partialTranscript,
+                    audioLevel,
+                )
+            }
+            return
+        }
         speechState = state
         speechMessage = message
         if (state == SpeechSessionState.IDLE || state == SpeechSessionState.FAILED) {
             dictationInputGate.clearSession()
+            dictationAllowsHistory = false
         }
         if (state != SpeechSessionState.LISTENING) audioLevel = 0f
         if (state == SpeechSessionState.IDLE) partialTranscript = ""
@@ -465,11 +528,30 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onFinalResult(text: String) {
-        if (!dictationInputGate.consumeResult(fieldProfile.allowsDictation)) return
-        val inputConnection = currentInputConnection ?: return
+        val disposition = dictationInputGate.consumeResult(fieldProfile.allowsDictation)
+        if (disposition == KeyboardDictationResultDisposition.REJECTED) return
         val polished = TranscriptPolisher.polish(text)
         if (polished.isBlank()) {
-            onStateChanged(SpeechSessionState.FAILED, "No speech was recognized. Try again.")
+            dictationAllowsHistory = false
+            if (disposition == KeyboardDictationResultDisposition.CURRENT_INPUT) {
+                onStateChanged(SpeechSessionState.FAILED, "No speech was recognized. Try again.")
+            } else {
+                resetSpeechDisplayAfterRecovery()
+            }
+            return
+        }
+        if (dictationAllowsHistory) historyStore.add(polished)
+        dictationAllowsHistory = false
+        val inputConnection = if (disposition == KeyboardDictationResultDisposition.CURRENT_INPUT) {
+            currentInputConnection
+        } else {
+            null
+        }
+        if (inputConnection == null) {
+            recoverableDictationStore.save(polished)
+            recoverableDictation = polished
+            resetSpeechDisplayAfterRecovery("Finished dictation ready to insert")
+            keyboardView?.updateRecoverableDictationAvailability(fieldProfile.allowsDictation)
             return
         }
         val insertion = TranscriptPolisher.textForInsertion(polished, contextBefore(), contextAfter())
@@ -479,7 +561,6 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         lastSpaceTapMillis = null
         lastDictationInsertion = insertion
         keyboardView?.updateUndoDictationAvailability(true)
-        if (fieldProfile.allowsPersonalizedLearning) historyStore.add(polished)
         partialTranscript = polished
         onStateChanged(SpeechSessionState.COMPLETED, "Inserted at the cursor")
         updateAfterDocumentChange()
@@ -489,6 +570,19 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                 onStateChanged(SpeechSessionState.IDLE, "Dictate")
             }
         }, 1_800L)
+    }
+
+    private fun resetSpeechDisplayAfterRecovery(message: String = "Dictate") {
+        speechState = SpeechSessionState.IDLE
+        speechMessage = message
+        partialTranscript = ""
+        audioLevel = 0f
+        keyboardView?.updateSpeechState(
+            speechState,
+            speechMessage,
+            partialTranscript,
+            audioLevel,
+        )
     }
 
     private fun cancelInFlightDictation() {

@@ -30,6 +30,7 @@ implementation and the listed runtime evidence exist.
 | Large-v3 WhisperKit, offline only | `createOnDeviceSpeechRecognizer`; support check and model download | airplane-mode dictation on supported hardware |
 | Tap-to-dictate in containing app | app-owned on-device speech session | device dictation and local-history check |
 | Keyboard dictation handoff | direct IME on-device speech session | dictate into at least two third-party apps |
+| Finished dictation recovery after the original keyboard disappears | privately persisted, time-limited transcript with explicit Insert/Discard actions and no cross-document auto-insertion | generation, persistence, accessibility, and field-switch tests |
 | Start, stop, cancel, partial level/status, error/retry | IME dictation toolbar and recognizer callbacks | device interaction and error-path tests |
 | Finished-text cleanup and contextual spacing | Kotlin port of deterministic transcript polish/insertion rules | unit tests and field insertion check |
 | Apple Intelligence punctuation refinement and opt-out | Persisted API 33+ quality-optimized on-device recognizer formatting, guarded against changed/reordered raw words | preference, intent, and faithfulness-policy tests plus device dictation |
@@ -52,7 +53,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 16, the repository has local automated evidence for:
+As of Android `versionCode` 17, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -97,9 +98,14 @@ As of Android `versionCode` 16, the repository has local automated evidence for:
   containing app and IME, with preparation/processing controls exposed to
   TalkBack as status-only instead of clickable no-ops;
 - document-generation binding for IME dictation, including cancellation while
-  recognition is processing and rejection of late partial, level, or final
+  recognition is preparing or listening and rejection of late partial/level
   callbacks after the keyboard moves to another app, field, or password input,
   with the prior document's transient transcript/status cleared on transition;
+- safe recovery after the user has stopped dictation: Android may finish the
+  processing result after the original editor disappears, but stores it
+  privately for at most 15 minutes and requires an explicit, TalkBack-labelled
+  Insert or Discard action; it never auto-inserts across document generations
+  or offers recovery inside a password field;
 - a shared document-work generation gate for asynchronous swipe decoding and
   correction candidates, invalidated at the earliest input lifecycle boundary
   so work started in one app cannot insert into or update the next app;
@@ -117,7 +123,7 @@ As of Android `versionCode` 16, the repository has local automated evidence for:
   documented formatted/raw pair checked by the same word-subsequence
   faithfulness rule as iOS, and a singleton fallback for recognizers that
   ignore the formatting request;
-- all 68 Android unit tests, all 21 instrumentation tests on an API 36 emulator,
+- all 69 Android unit tests, all 23 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with
@@ -146,6 +152,10 @@ from emulator or unit-test results.
   ignore the request retain the deterministic transcript polisher.
 - Android does not require the 15-minute iOS background microphone keep-alive.
   Direct capture while the IME is visible is both simpler and more private.
+  Scribe cancels a still-listening session when the IME leaves, but lets an
+  explicitly stopped, processing session finish and offers its result for
+  manual insertion. This retains the iOS recovery guarantee without keeping an
+  invisible Android keyboard microphone open.
 - Android does not expose the user's full Gboard lexicon to another IME. Scribe
   reads the platform Personal Dictionary while active, uses its bundled
   frequency dictionaries for the wider vocabulary, and records accepted or

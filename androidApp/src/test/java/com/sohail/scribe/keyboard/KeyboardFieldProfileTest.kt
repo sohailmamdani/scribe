@@ -136,6 +136,14 @@ class KeyboardFieldProfileTest {
     @Test fun accessibilityLabelsNameControlsAndAlternates() {
         assertEquals("Search", KeyboardAccessibilityLabels.labelFor("return", "search"))
         assertEquals("Start dictation", KeyboardAccessibilityLabels.labelFor("microphone", "Dictate"))
+        assertEquals(
+            "Insert finished dictation",
+            KeyboardAccessibilityLabels.labelFor("insert-recovered-dictation", "Insert finished dictation"),
+        )
+        assertEquals(
+            "Discard the finished dictation",
+            KeyboardAccessibilityLabels.labelFor("discard-recovered-dictation", "Discard"),
+        )
         assertEquals("Stop dictation", KeyboardAccessibilityLabels.labelFor("microphone", "Stop"))
         assertEquals(
             "Undo autocorrection to teh",

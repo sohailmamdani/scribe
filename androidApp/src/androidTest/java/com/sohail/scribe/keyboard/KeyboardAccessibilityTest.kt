@@ -309,6 +309,35 @@ class KeyboardAccessibilityTest {
         }
     }
 
+    @Test fun finishedDictationRequiresExplicitAccessibleInsertOrDiscard() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val listener = RecordingKeyboardListener()
+        instrumentation.runOnMainSync {
+            val view = measuredKeyboardView(instrumentation.targetContext, listener)
+            view.updateRecoverableDictationAvailability(true)
+
+            val labels = virtualKeyLabels(view)
+            assertTrue("Insert finished dictation" in labels)
+            assertTrue("Discard the finished dictation" in labels)
+            assertFalse("Start dictation" in labels)
+            clickVirtualKey(view, "Insert finished dictation")
+            assertEquals(1, listener.recoveredInsertions)
+
+            view.updateRecoverableDictationAvailability(true)
+            clickVirtualKey(view, "Discard the finished dictation")
+            assertEquals(1, listener.recoveredDiscards)
+
+            view.updateFieldProfile(
+                KeyboardFieldProfile.from(
+                    InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
+                    0,
+                ),
+            )
+            view.updateRecoverableDictationAvailability(true)
+            assertFalse("Insert finished dictation" in virtualKeyLabels(view))
+        }
+    }
+
     private fun measuredKeyboardView(
         context: android.content.Context,
         actionListener: KeyboardActionListener,
@@ -377,6 +406,8 @@ class KeyboardAccessibilityTest {
         var spaces = 0
         var cursorMovement = 0
         var dictationToggles = 0
+        var recoveredInsertions = 0
+        var recoveredDiscards = 0
 
         override fun onText(text: String, isLetter: Boolean, evidence: KeyboardTapEvidence?) {
             texts += text
@@ -394,5 +425,7 @@ class KeyboardAccessibilityTest {
         override fun onToggleDictation() { dictationToggles += 1 }
         override fun onCancelDictation() = Unit
         override fun onUndoDictation() = Unit
+        override fun onInsertRecoveredDictation() { recoveredInsertions += 1 }
+        override fun onDiscardRecoveredDictation() { recoveredDiscards += 1 }
     }
 }

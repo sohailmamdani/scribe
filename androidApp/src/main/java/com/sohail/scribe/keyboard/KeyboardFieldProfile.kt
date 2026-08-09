@@ -126,6 +126,8 @@ object KeyboardAccessibilityLabels {
             }
             "cancel" -> "Cancel dictation"
             "undo-dictation" -> "Undo last dictation"
+            "insert-recovered-dictation" -> "Insert finished dictation"
+            "discard-recovered-dictation" -> "Discard the finished dictation"
             "undo-autocorrection" -> "Undo autocorrection to ${visibleLabel.removePrefix("Undo to ")}"
             "mode" -> if (visibleLabel == "ABC") "Letters" else "Numbers and symbols"
             "more-symbols" -> if (visibleLabel == "123") "Numbers" else "More symbols"

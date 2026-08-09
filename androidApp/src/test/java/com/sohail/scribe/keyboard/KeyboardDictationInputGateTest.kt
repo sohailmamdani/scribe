@@ -2,14 +2,15 @@ package com.sohail.scribe.keyboard
 
 import com.sohail.scribe.speech.SpeechSessionState
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class KeyboardDictationInputGateTest {
-    @Test fun cancelsEveryInFlightStateIncludingProcessing() {
+    @Test fun letsStoppedProcessingFinishForExplicitRecovery() {
         assertTrue(KeyboardDictationInputGate.shouldCancel(SpeechSessionState.PREPARING))
         assertTrue(KeyboardDictationInputGate.shouldCancel(SpeechSessionState.LISTENING))
-        assertTrue(KeyboardDictationInputGate.shouldCancel(SpeechSessionState.PROCESSING))
+        assertFalse(KeyboardDictationInputGate.shouldCancel(SpeechSessionState.PROCESSING))
         assertFalse(KeyboardDictationInputGate.shouldCancel(SpeechSessionState.IDLE))
         assertFalse(KeyboardDictationInputGate.shouldCancel(SpeechSessionState.COMPLETED))
         assertFalse(KeyboardDictationInputGate.shouldCancel(SpeechSessionState.FAILED))
@@ -21,8 +22,15 @@ class KeyboardDictationInputGateTest {
         gate.bindSession()
 
         assertTrue(gate.acceptsCallback(allowsDictation = true))
-        assertTrue(gate.consumeResult(allowsDictation = true))
-        assertFalse(gate.consumeResult(allowsDictation = true))
+        assertTrue(gate.hasSession())
+        assertEquals(
+            KeyboardDictationResultDisposition.CURRENT_INPUT,
+            gate.consumeResult(allowsDictation = true),
+        )
+        assertEquals(
+            KeyboardDictationResultDisposition.REJECTED,
+            gate.consumeResult(allowsDictation = true),
+        )
     }
 
     @Test fun rejectsAResultAfterAndroidMovesToAnotherInput() {
@@ -33,7 +41,11 @@ class KeyboardDictationInputGateTest {
         gate.beginInput()
 
         assertFalse(gate.acceptsCallback(allowsDictation = true))
-        assertFalse(gate.consumeResult(allowsDictation = true))
+        assertTrue(gate.hasSession())
+        assertEquals(
+            KeyboardDictationResultDisposition.RECOVERABLE,
+            gate.consumeResult(allowsDictation = true),
+        )
     }
 
     @Test fun rejectsAndConsumesAResultWhenTheCurrentFieldDisallowsDictation() {
@@ -41,7 +53,23 @@ class KeyboardDictationInputGateTest {
         gate.beginInput()
         gate.bindSession()
 
-        assertFalse(gate.consumeResult(allowsDictation = false))
+        assertEquals(
+            KeyboardDictationResultDisposition.RECOVERABLE,
+            gate.consumeResult(allowsDictation = false),
+        )
         assertFalse(gate.acceptsCallback(allowsDictation = true))
+    }
+
+    @Test fun clearingACancelledSessionRejectsItsLateResult() {
+        val gate = KeyboardDictationInputGate()
+        gate.beginInput()
+        gate.bindSession()
+        gate.clearSession()
+
+        assertFalse(gate.hasSession())
+        assertEquals(
+            KeyboardDictationResultDisposition.REJECTED,
+            gate.consumeResult(allowsDictation = true),
+        )
     }
 }
