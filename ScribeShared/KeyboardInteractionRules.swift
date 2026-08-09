@@ -98,6 +98,27 @@ enum KeyboardPunctuationPalette {
     }
 }
 
+enum KeyboardSymbolPageKind: Sendable, Equatable {
+    case numbers
+    case symbols
+}
+
+enum KeyboardSymbolPageTapRules {
+    static func shouldReturnToLetters(
+        behavior: KeyboardSymbolPageTapBehavior,
+        scope: KeyboardSymbolPageTapScope,
+        page: KeyboardSymbolPageKind
+    ) -> Bool {
+        guard behavior == .returnToLetters else { return false }
+        switch scope {
+        case .numbersAndSymbols:
+            return true
+        case .symbolsOnly:
+            return page == .symbols
+        }
+    }
+}
+
 enum KeyboardGestureResolution: Equatable {
     case primary
     case alternatePreview
@@ -241,6 +262,42 @@ struct KeyboardGeometryRules: Equatable {
             + 2 * controlToLetterGap(totalWidth: totalWidth)
             + 7 * tenColumnKeyWidth(totalWidth: totalWidth)
             + 6 * horizontalGap
+    }
+}
+
+struct KeyboardBottomRowWidths: Equatable {
+    let mode: Double
+    let returnKey: Double
+    let space: Double
+
+    static let preferredModeWidth = 58.0
+    static let preferredReturnWidth = 64.0
+    static let minimumModeWidth = 50.0
+    static let inputModeWidth = 45.0
+
+    static func resolve(
+        totalWidth: Double,
+        outerInset: Double,
+        horizontalGap: Double,
+        punctuationWidth: Double,
+        includesInputModeSwitchKey: Bool
+    ) -> KeyboardBottomRowWidths {
+        let availableWidth = totalWidth - 2 * outerInset
+        let mode = min(
+            preferredModeWidth,
+            max(minimumModeWidth, availableWidth * 0.16)
+        )
+        let returnKey = mode + (preferredReturnWidth - preferredModeWidth)
+        let controlCount = includesInputModeSwitchKey ? 5.0 : 4.0
+        let fixedWidth = mode + returnKey + punctuationWidth
+            + (includesInputModeSwitchKey ? inputModeWidth : 0)
+        let space = max(1, availableWidth - fixedWidth - (controlCount - 1) * horizontalGap)
+
+        return KeyboardBottomRowWidths(
+            mode: mode,
+            returnKey: returnKey,
+            space: space
+        )
     }
 }
 

@@ -26,6 +26,10 @@ final class KeyboardDocumentState: ObservableObject {
         if self.needsInputModeSwitchKey != needsInputModeSwitchKey {
             self.needsInputModeSwitchKey = needsInputModeSwitchKey
         }
+        refreshPreferences()
+    }
+
+    func refreshPreferences() {
         let latestPreferences = preferencesStore.preferences
         if preferences != latestPreferences {
             preferences = latestPreferences

@@ -2,6 +2,66 @@ import XCTest
 @testable import ScribeSharedCore
 
 final class KeyboardInteractionRulesTests: XCTestCase {
+    func testSymbolPageTapScopeCanExcludeNumbers() {
+        XCTAssertTrue(
+            KeyboardSymbolPageTapRules.shouldReturnToLetters(
+                behavior: .returnToLetters,
+                scope: .numbersAndSymbols,
+                page: .numbers
+            )
+        )
+        XCTAssertFalse(
+            KeyboardSymbolPageTapRules.shouldReturnToLetters(
+                behavior: .returnToLetters,
+                scope: .symbolsOnly,
+                page: .numbers
+            )
+        )
+        XCTAssertTrue(
+            KeyboardSymbolPageTapRules.shouldReturnToLetters(
+                behavior: .returnToLetters,
+                scope: .symbolsOnly,
+                page: .symbols
+            )
+        )
+        XCTAssertFalse(
+            KeyboardSymbolPageTapRules.shouldReturnToLetters(
+                behavior: .stayOnCurrentPage,
+                scope: .numbersAndSymbols,
+                page: .symbols
+            )
+        )
+    }
+
+    func testBottomRowMakesModeNarrowerThanReturnAndExpandsSpace() {
+        let widths = KeyboardBottomRowWidths.resolve(
+            totalWidth: 390,
+            outerInset: KeyboardGeometryRules.portrait.outerInset,
+            horizontalGap: KeyboardGeometryRules.portrait.horizontalGap,
+            punctuationWidth: 46,
+            includesInputModeSwitchKey: false
+        )
+
+        XCTAssertEqual(widths.mode, 58)
+        XCTAssertEqual(widths.returnKey, 64)
+        XCTAssertEqual(widths.space, 190)
+        XCTAssertLessThan(widths.mode, widths.returnKey)
+    }
+
+    func testBottomRowFitsWithSystemInputModeKeyOnNarrowPhones() {
+        let widths = KeyboardBottomRowWidths.resolve(
+            totalWidth: 320,
+            outerInset: KeyboardGeometryRules.portrait.outerInset,
+            horizontalGap: KeyboardGeometryRules.portrait.horizontalGap,
+            punctuationWidth: 46,
+            includesInputModeSwitchKey: true
+        )
+
+        XCTAssertGreaterThanOrEqual(widths.mode, KeyboardBottomRowWidths.minimumModeWidth)
+        XCTAssertEqual(widths.returnKey - widths.mode, 6)
+        XCTAssertGreaterThan(widths.space, 80)
+    }
+
     func testGboardNumberAndSymbolRows() {
         XCTAssertEqual(
             KeyboardSymbolLayouts.numbers,

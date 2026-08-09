@@ -412,10 +412,16 @@ struct KeyboardRootView: View {
     private var bottomRow: some View {
         GeometryReader { proxy in
             let availableWidth = proxy.size.width - 2 * outerInset
-            let standardControlWidth = min(102, max(78, availableWidth * 0.24))
-            let modeWidth = documentState.needsInputModeSwitchKey ? CGFloat(72) : standardControlWidth
-            let returnWidth = documentState.needsInputModeSwitchKey ? CGFloat(78) : standardControlWidth
             let punctuationWidth = usesCompactMetrics ? CGFloat(43) : CGFloat(46)
+            let widths = KeyboardBottomRowWidths.resolve(
+                totalWidth: Double(proxy.size.width),
+                outerInset: Double(outerInset),
+                horizontalGap: Double(horizontalGap),
+                punctuationWidth: Double(punctuationWidth),
+                includesInputModeSwitchKey: documentState.needsInputModeSwitchKey
+            )
+            let modeWidth = CGFloat(widths.mode)
+            let returnWidth = CGFloat(widths.returnKey)
             let punctuationPopupWidth = min(
                 320,
                 availableWidth - returnWidth - horizontalGap
@@ -752,6 +758,7 @@ struct KeyboardRootView: View {
         let selection = punctuationSelection
         cancelPunctuationGesture()
         insertDelimiter(String(selection ?? "."))
+        applySymbolPageTapBehavior()
     }
 
     private func cancelPunctuationGesture() {
@@ -1118,10 +1125,24 @@ struct KeyboardRootView: View {
     }
 
     private func applySymbolPageTapBehavior() {
-        guard layout != .letters,
-              documentState.preferences.symbolPageTapBehavior == .returnToLetters else {
+        // The containing app can change this preference while iOS keeps the
+        // keyboard extension process resident. Re-read at the actual symbol
+        // commit boundary so the next tap honors the new scope immediately.
+        documentState.refreshPreferences()
+        let page: KeyboardSymbolPageKind
+        switch layout {
+        case .letters:
             return
+        case .numbers:
+            page = .numbers
+        case .symbols:
+            page = .symbols
         }
+        guard KeyboardSymbolPageTapRules.shouldReturnToLetters(
+            behavior: documentState.preferences.symbolPageTapBehavior,
+            scope: documentState.preferences.symbolPageTapScope,
+            page: page
+        ) else { return }
         layout = .letters
         refreshAutomaticShift()
     }

@@ -25,6 +25,7 @@ final class KeyboardPreferencesTests: XCTestCase {
         XCTAssertEqual(store.preferences, .standard)
         XCTAssertEqual(store.preferences.alternateHoldDelayMilliseconds, 650)
         XCTAssertEqual(store.preferences.symbolPageTapBehavior, .stayOnCurrentPage)
+        XCTAssertEqual(store.preferences.symbolPageTapScope, .numbersAndSymbols)
     }
 
     func testPreferencesRoundTrip() {
@@ -33,6 +34,7 @@ final class KeyboardPreferencesTests: XCTestCase {
             alternateSymbolsEnabled: false,
             alternateHoldDelayMilliseconds: 400,
             symbolPageTapBehavior: .returnToLetters,
+            symbolPageTapScope: .symbolsOnly,
             keyPreviewsEnabled: false,
             hapticsEnabled: false,
             doubleSpacePeriodEnabled: false
@@ -48,6 +50,7 @@ final class KeyboardPreferencesTests: XCTestCase {
             alternateSymbolsEnabled: true,
             alternateHoldDelayMilliseconds: 10,
             symbolPageTapBehavior: .stayOnCurrentPage,
+            symbolPageTapScope: .numbersAndSymbols,
             keyPreviewsEnabled: true,
             hapticsEnabled: true,
             doubleSpacePeriodEnabled: true
@@ -56,6 +59,7 @@ final class KeyboardPreferencesTests: XCTestCase {
             alternateSymbolsEnabled: true,
             alternateHoldDelayMilliseconds: 9_000,
             symbolPageTapBehavior: .stayOnCurrentPage,
+            symbolPageTapScope: .numbersAndSymbols,
             keyPreviewsEnabled: true,
             hapticsEnabled: true,
             doubleSpacePeriodEnabled: true
@@ -77,6 +81,15 @@ final class KeyboardPreferencesTests: XCTestCase {
         XCTAssertEqual(
             SharedKeyboardPreferencesStore(defaults: defaults).preferences.symbolPageTapBehavior,
             .stayOnCurrentPage
+        )
+    }
+
+    func testUnknownSymbolScopeFallsBackSafely() {
+        defaults.set("future-scope", forKey: "keyboard.preferences.symbolPageTapScope")
+
+        XCTAssertEqual(
+            SharedKeyboardPreferencesStore(defaults: defaults).preferences.symbolPageTapScope,
+            .numbersAndSymbols
         )
     }
 

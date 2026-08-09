@@ -49,6 +49,15 @@ The popup uses the same two eight-character rows as the Gboard reference: `& % +
 
 No actionable P0, P1, or P2 differences remain within the requested keyboard region.
 
+## Follow-up: bottom-row sizing and symbol-return scope
+
+- Visual evidence: `/tmp/scribe-bottom-row-build35.png` and `/tmp/scribe-symbol-scope-settings-build35.png`
+- The `123`/`ABC` key is now 58 points on a standard 390-point portrait keyboard, while Return is 64 points. This preserves the requested hierarchy—mode narrower than Return—and expands Space to 190 points when the system globe key is absent.
+- Narrow-device geometry keeps the same six-point relationship while preserving a usable Space key when iOS requires the globe key.
+- Keyboard Settings now presents an `Apply to` picker with `Numbers & symbols` and `Symbols only`. The latter keeps the `123` page open after a digit or punctuation tap and returns to letters only after a key on the `#+=` page.
+- Live simulator review confirmed the resized key caps, enlarged Space bar, picker layout, selection, and persistence. Shared-core tests cover both scope branches and preference round trips. The generic unsigned simulator build does not carry the production App Group entitlement, so cross-process preference delivery is gated by the signed entitlement check in the TestFlight release script.
+- No actionable P0, P1, or P2 visual issues remain.
+
 ## Follow-up polish
 
 None required for this change.

@@ -44,10 +44,19 @@ struct KeyboardSettingsView: View {
                         Text(behavior.title).tag(behavior)
                     }
                 }
+
+                Picker(
+                    "Apply to",
+                    selection: binding(\.symbolPageTapScope)
+                ) {
+                    ForEach(KeyboardSymbolPageTapScope.allCases) { scope in
+                        Text(scope.title).tag(scope)
+                    }
+                }
             } header: {
                 Text("Symbols")
             } footer: {
-                Text("The symbol-page setting applies to both the 123 and #+= pages.")
+                Text("Choose whether this behavior applies to both the 123 and #+= pages, or only the #+= page.")
             }
 
             Section("Typing") {
