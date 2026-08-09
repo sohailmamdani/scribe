@@ -51,7 +51,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 12, the repository has local automated evidence for:
+As of Android `versionCode` 13, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -95,6 +95,10 @@ As of Android `versionCode` 12, the repository has local automated evidence for:
 - explicit fresh-session Retry actions after recognition failure in both the
   containing app and IME, with preparation/processing controls exposed to
   TalkBack as status-only instead of clickable no-ops;
+- document-generation binding for IME dictation, including cancellation while
+  recognition is processing and rejection of late partial, level, or final
+  callbacks after the keyboard moves to another app, field, or password input,
+  with the prior document's transient transcript/status cleared on transition;
 - swipe insertion without a forced trailing space, with punctuation-aware word
   boundaries and manual Shift carried into the decoded word;
 - deliberate 350 ms space-bar cursor activation, plus a punctuation palette
@@ -104,7 +108,7 @@ As of Android `versionCode` 12, the repository has local automated evidence for:
   API 33 fallback, explicit installed/pending/downloadable model states, and
   generation-gated callbacks so stale support/download work cannot end a new
   dictation session;
-- all 59 Android unit tests, all 17 instrumentation tests on an API 36 emulator,
+- all 63 Android unit tests, all 17 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with

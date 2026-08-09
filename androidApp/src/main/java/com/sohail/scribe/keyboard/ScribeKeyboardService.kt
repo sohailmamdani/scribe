@@ -28,6 +28,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     private val worker = Executors.newSingleThreadExecutor()
     private val suggestionGeneration = AtomicInteger()
     private val userDictionaryGeneration = AtomicInteger()
+    private val dictationInputGate = KeyboardDictationInputGate()
     private lateinit var preferencesStore: ScribePreferences
     private lateinit var historyStore: DictationHistoryStore
     private lateinit var correctionLearning: KeyboardCorrectionLearningStore
@@ -85,6 +86,16 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     /** Keep the custom keyboard visible in landscape instead of Android's extract editor. */
     override fun onEvaluateFullscreenMode(): Boolean = false
 
+    override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
+        super.onStartInput(attribute, restarting)
+        dictationInputGate.beginInput()
+        cancelInFlightDictation()
+        speechState = SpeechSessionState.IDLE
+        speechMessage = "Dictate"
+        partialTranscript = ""
+        audioLevel = 0f
+    }
+
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         preferences = preferencesStore.keyboard
@@ -95,11 +106,6 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         selectionStart = info?.initialSelStart ?: -1
         selectionEnd = info?.initialSelEnd ?: -1
         markLocalMutation()
-        if (!fieldProfile.allowsDictation &&
-            (speechState == SpeechSessionState.LISTENING || speechState == SpeechSessionState.PREPARING)
-        ) {
-            speechSession.cancel()
-        }
         if (fieldProfile.sensitive) {
             speechState = SpeechSessionState.IDLE
             speechMessage = "Dictate"
@@ -126,10 +132,15 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onFinishInputView(finishingInput: Boolean) {
         acceptPendingCorrection()
-        if (speechState == SpeechSessionState.LISTENING || speechState == SpeechSessionState.PREPARING) {
-            speechSession.cancel()
-        }
+        dictationInputGate.invalidateInput()
+        cancelInFlightDictation()
         super.onFinishInputView(finishingInput)
+    }
+
+    override fun onFinishInput() {
+        dictationInputGate.invalidateInput()
+        cancelInFlightDictation()
+        super.onFinishInput()
     }
 
     override fun onUpdateSelection(
@@ -391,6 +402,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                         acceptPendingCorrection()
                         tapEvidence.clear()
                         lastSpaceTapMillis = null
+                        dictationInputGate.bindSession()
                         speechSession.start()
                     }
                 }
@@ -399,6 +411,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onCancelDictation() {
+        dictationInputGate.clearSession()
         speechSession.cancel()
     }
 
@@ -422,22 +435,29 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     override fun onStateChanged(state: SpeechSessionState, message: String) {
         speechState = state
         speechMessage = message
+        if (state == SpeechSessionState.IDLE || state == SpeechSessionState.FAILED) {
+            dictationInputGate.clearSession()
+        }
         if (state != SpeechSessionState.LISTENING) audioLevel = 0f
         if (state == SpeechSessionState.IDLE) partialTranscript = ""
         keyboardView?.updateSpeechState(state, message, partialTranscript, audioLevel)
     }
 
     override fun onAudioLevel(level: Float) {
+        if (!dictationInputGate.acceptsCallback(fieldProfile.allowsDictation)) return
         audioLevel = level
         keyboardView?.updateSpeechState(speechState, speechMessage, partialTranscript, audioLevel)
     }
 
     override fun onPartialResult(text: String) {
+        if (!dictationInputGate.acceptsCallback(fieldProfile.allowsDictation)) return
         partialTranscript = text
         keyboardView?.updateSpeechState(speechState, speechMessage, partialTranscript, audioLevel)
     }
 
     override fun onFinalResult(text: String) {
+        if (!dictationInputGate.consumeResult(fieldProfile.allowsDictation)) return
+        val inputConnection = currentInputConnection ?: return
         val polished = TranscriptPolisher.polish(text)
         if (polished.isBlank()) {
             onStateChanged(SpeechSessionState.FAILED, "No speech was recognized. Try again.")
@@ -445,7 +465,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         }
         val insertion = TranscriptPolisher.textForInsertion(polished, contextBefore(), contextAfter())
         markLocalMutation()
-        currentInputConnection?.commitText(insertion, 1)
+        inputConnection.commitText(insertion, 1)
         tapEvidence.clear()
         lastSpaceTapMillis = null
         lastDictationInsertion = insertion
@@ -460,6 +480,12 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
                 onStateChanged(SpeechSessionState.IDLE, "Dictate")
             }
         }, 1_800L)
+    }
+
+    private fun cancelInFlightDictation() {
+        if (KeyboardDictationInputGate.shouldCancel(speechState)) {
+            speechSession.cancel()
+        }
     }
 
     private fun applyAutomaticCorrection(delimiter: String): AppliedCorrection? {
