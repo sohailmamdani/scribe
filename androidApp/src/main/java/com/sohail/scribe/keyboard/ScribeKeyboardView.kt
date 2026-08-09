@@ -110,14 +110,17 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private var punctuationPopupVisible = false
     private var selectedPunctuation: String? = null
     private var offersInputModeSwitch = true
+    private val virtualIdByKeyId = mutableMapOf<String, Int>()
+    private val keyIdByVirtualId = mutableMapOf<Int, String>()
+    private var nextVirtualId = 0
     private val accessibilityHelper = object : ExploreByTouchHelper(this) {
         override fun getVirtualViewAt(x: Float, y: Float): Int {
             val resolved = keyAt(x, y) ?: return INVALID_ID
-            return keys.indexOfFirst { it.id == resolved.id }.takeIf { it >= 0 } ?: INVALID_ID
+            return virtualIdForKeyId(resolved.id)
         }
 
         override fun getVisibleVirtualViews(virtualViewIds: MutableList<Int>) {
-            keys.indices.forEach(virtualViewIds::add)
+            keys.forEach { virtualViewIds += virtualIdForKeyId(it.id) }
         }
 
         @Suppress("DEPRECATION") // ExploreByTouchHelper virtual children require parent-relative bounds.
@@ -125,8 +128,16 @@ class ScribeKeyboardView(context: Context) : View(context) {
             virtualViewId: Int,
             node: AccessibilityNodeInfoCompat,
         ) {
-            val key = keys.getOrNull(virtualViewId) ?: return
             node.className = "android.widget.Button"
+            val key = keyForVirtualId(virtualViewId)
+            if (key == null) {
+                node.contentDescription = "Unavailable keyboard control"
+                node.setBoundsInParent(Rect(0, 0, 1, 1))
+                node.isClickable = false
+                node.isEnabled = false
+                node.isVisibleToUser = false
+                return
+            }
             node.contentDescription = accessibleLabel(key)
             node.hintText = when {
                 key.kind == KeyKind.SPACE -> "Touch and hold, then drag to move the cursor"
@@ -159,7 +170,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
             action: Int,
             arguments: Bundle?,
         ): Boolean {
-            val key = keys.getOrNull(virtualViewId)?.takeIf(KeySpec::enabled) ?: return false
+            val key = keyForVirtualId(virtualViewId)?.takeIf(KeySpec::enabled) ?: return false
             return when (action) {
                 AccessibilityNodeInfoCompat.ACTION_CLICK -> {
                     commitKey(key)
@@ -177,6 +188,19 @@ class ScribeKeyboardView(context: Context) : View(context) {
             }
         }
     }
+
+    private fun virtualIdForKeyId(keyId: String): Int = virtualIdByKeyId.getOrPut(keyId) {
+        nextVirtualId.also { virtualId ->
+            nextVirtualId += 1
+            keyIdByVirtualId[virtualId] = keyId
+        }
+    }
+
+    private fun keyForVirtualId(virtualViewId: Int): KeySpec? =
+        keyIdByVirtualId[virtualViewId]?.let { keyId -> keys.firstOrNull { it.id == keyId } }
+
+    internal fun visibleAccessibilityVirtualIds(): List<Int> =
+        keys.map { virtualIdForKeyId(it.id) }
 
     private val alternateRunnable = Runnable {
         val key = currentKey ?: return@Runnable

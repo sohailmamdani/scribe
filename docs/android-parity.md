@@ -53,7 +53,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 19, the repository has local automated evidence for:
+As of Android `versionCode` 20, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -62,7 +62,9 @@ As of Android `versionCode` 19, the repository has local automated evidence for:
 - password-field suppression of dictation, transcript state, suggestions, and
   the microphone control;
 - TalkBack virtual button nodes for every rendered key, spoken punctuation and
-  alternate names, click actions, and long-click alternate actions;
+  alternate names, click actions, and long-click alternate actions, with stable
+  virtual identities across dynamic toolbar states and inert stale-node handling
+  so focus cannot be reassigned to a different key;
 - guarded undo of the last dictation, plus hold-delete acceleration from
   characters to whole words using Unicode code-point deletion, with the first
   Backspace committed on touch-down like iOS instead of delayed until release;
@@ -135,7 +137,7 @@ As of Android `versionCode` 19, the repository has local automated evidence for:
   manually shifted `The` swipe;
 - live Chrome verification that a deliberate space-bar drag changes the host
   selection and inserts the next character before the untouched trailing text;
-- live version-18 emulator rendering at 1280×800 dp tablet landscape and an
+- live version-19 emulator rendering at 1280×800 dp tablet landscape and an
   841×701 dp unfolded-foldable analogue, with the app, complete four-row IME,
   alternates, toolbar, and input-mode switch visible without clipping or an
   extract editor.

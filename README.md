@@ -69,6 +69,8 @@ The Android IME adapts to text, email, URL, numeric, phone, password, and editor
 action traits; exposes every custom-drawn key as a TalkBack virtual button; and
 uses the same bundled word, bigram, and swipe corpora as the iOS keyboard for
 private context-aware correction and resampled QWERTY-shape gesture decoding.
+Virtual key identities remain stable while suggestions and dictation controls
+change, so TalkBack focus cannot silently jump to a different QWERTY key.
 Its touch regions tile the visual gaps between keycaps, and accepted automatic
 or manual corrections expose the same one-tap undo affordance as the iOS
 keyboard. The `123` page carries the same long-press digit alternates as iOS,

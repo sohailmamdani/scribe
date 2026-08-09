@@ -65,11 +65,10 @@ class KeyboardAccessibilityTest {
             view.layout(0, 0, 1_080, 900)
 
             val provider = view.accessibilityNodeProvider!!
-            assertEquals("Q", provider.createAccessibilityNodeInfo(1)?.contentDescription?.toString())
-            assertEquals(false, provider.performAction(1, AccessibilityNodeInfo.ACTION_LONG_CLICK, null))
-            val periodIndex = (0 until 64).first { index ->
-                provider.createAccessibilityNodeInfo(index)?.contentDescription?.toString() == "Period"
-            }
+            val qIndex = virtualKeyIndex(view, "Q")
+            assertEquals("Q", provider.createAccessibilityNodeInfo(qIndex)?.contentDescription?.toString())
+            assertEquals(false, provider.performAction(qIndex, AccessibilityNodeInfo.ACTION_LONG_CLICK, null))
+            val periodIndex = virtualKeyIndex(view, "Period")
             assertEquals(null, provider.createAccessibilityNodeInfo(periodIndex)?.hintText)
         }
     }
@@ -160,10 +159,7 @@ class KeyboardAccessibilityTest {
                 ),
             )
             val provider = view.accessibilityNodeProvider!!
-            val modeIndex = (0 until 64).first { index ->
-                provider.createAccessibilityNodeInfo(index)?.contentDescription?.toString() ==
-                    "Numbers and symbols"
-            }
+            val modeIndex = virtualKeyIndex(view, "Numbers and symbols")
             provider.performAction(modeIndex, AccessibilityNodeInfo.ACTION_CLICK, null)
             bounds = virtualKeyBounds(view, "Period")
             view.onTouchEvent(MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, bounds.exactCenterX(), bounds.exactCenterY(), 0))
@@ -174,7 +170,7 @@ class KeyboardAccessibilityTest {
             view.onTouchEvent(MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, bounds.exactCenterX(), bounds.exactCenterY(), 0))
             assertTrue(
                 view.accessibilityNodeProvider
-                    ?.createAccessibilityNodeInfo(1)
+                    ?.createAccessibilityNodeInfo(virtualKeyIndex(view, "Q, alternate 1"))
                     ?.contentDescription
                     ?.toString()
                     ?.startsWith("Q") == true,
@@ -220,15 +216,14 @@ class KeyboardAccessibilityTest {
             view.layout(0, 0, 1_080, 900)
 
             val provider = view.accessibilityNodeProvider!!
-            val modeIndex = (0 until 64).first { index ->
-                provider.createAccessibilityNodeInfo(index)?.contentDescription?.toString() ==
-                    "Numbers and symbols"
-            }
+            val modeIndex = virtualKeyIndex(view, "Numbers and symbols")
             provider.performAction(modeIndex, AccessibilityNodeInfo.ACTION_CLICK, null)
 
             assertEquals(
                 "1, alternate Exclamation mark",
-                provider.createAccessibilityNodeInfo(1)?.contentDescription?.toString(),
+                provider.createAccessibilityNodeInfo(
+                    virtualKeyIndex(view, "1, alternate Exclamation mark"),
+                )?.contentDescription?.toString(),
             )
         }
     }
@@ -251,7 +246,9 @@ class KeyboardAccessibilityTest {
 
             val provider = view.accessibilityNodeProvider
             assertNotNull(provider)
-            val firstKey = provider!!.createAccessibilityNodeInfo(0)
+            val firstKey = provider!!.createAccessibilityNodeInfo(
+                virtualKeyIndex(view, "q, alternate 1"),
+            )
             assertNotNull(firstKey)
             assertEquals("q, alternate 1", firstKey!!.contentDescription.toString())
         }
@@ -275,8 +272,17 @@ class KeyboardAccessibilityTest {
 
             val provider = view.accessibilityNodeProvider
             assertNotNull(provider)
-            assertEquals("Start dictation", provider!!.createAccessibilityNodeInfo(0)?.contentDescription.toString())
-            assertEquals("1", provider.createAccessibilityNodeInfo(1)?.contentDescription.toString())
+            assertEquals(
+                "Start dictation",
+                provider!!.createAccessibilityNodeInfo(
+                    virtualKeyIndex(view, "Start dictation"),
+                )?.contentDescription.toString(),
+            )
+            assertEquals(
+                "1",
+                provider.createAccessibilityNodeInfo(virtualKeyIndex(view, "1"))
+                    ?.contentDescription.toString(),
+            )
         }
     }
 
@@ -334,7 +340,9 @@ class KeyboardAccessibilityTest {
             assertEquals(
                 "Undo autocorrection to teh",
                 view.accessibilityNodeProvider
-                    ?.createAccessibilityNodeInfo(0)
+                    ?.createAccessibilityNodeInfo(
+                        virtualKeyIndex(view, "Undo autocorrection to teh"),
+                    )
                     ?.contentDescription
                     ?.toString(),
             )
@@ -346,6 +354,9 @@ class KeyboardAccessibilityTest {
         val listener = RecordingKeyboardListener()
         instrumentation.runOnMainSync {
             val view = measuredKeyboardView(instrumentation.targetContext, listener)
+            val provider = view.accessibilityNodeProvider!!
+            val microphoneId = virtualKeyIndex(view, "Start dictation")
+            val qwertyId = virtualKeyIndex(view, "Q, alternate 1")
             val qwertyBounds = virtualKeyBounds(view, "Q, alternate 1")
             view.updateRecoverableDictationAvailability(true)
 
@@ -353,7 +364,13 @@ class KeyboardAccessibilityTest {
             assertTrue("Insert finished dictation" in labels)
             assertTrue("Discard the finished dictation" in labels)
             assertFalse("Start dictation" in labels)
+            assertEquals(qwertyId, virtualKeyIndex(view, "Q, alternate 1"))
             assertEquals(qwertyBounds, virtualKeyBounds(view, "Q, alternate 1"))
+            val staleMicrophone = provider.createAccessibilityNodeInfo(microphoneId)!!
+            assertEquals("Unavailable keyboard control", staleMicrophone.contentDescription.toString())
+            assertFalse(staleMicrophone.isEnabled)
+            assertFalse(staleMicrophone.isVisibleToUser)
+            assertFalse(provider.performAction(microphoneId, AccessibilityNodeInfo.ACTION_CLICK, null))
             clickVirtualKey(view, "Insert finished dictation")
             assertEquals(1, listener.recoveredInsertions)
 
@@ -406,8 +423,7 @@ class KeyboardAccessibilityTest {
 
     private fun virtualKeyLabels(view: ScribeKeyboardView): List<String> {
         val provider = view.accessibilityNodeProvider!!
-        val childCount = provider.createAccessibilityNodeInfo(View.NO_ID)?.childCount ?: 0
-        return (0 until childCount).mapNotNull { candidate ->
+        return view.visibleAccessibilityVirtualIds().mapNotNull { candidate ->
             provider.createAccessibilityNodeInfo(candidate)?.contentDescription?.toString()
         }
     }
@@ -420,8 +436,7 @@ class KeyboardAccessibilityTest {
 
     private fun virtualKeyIndex(view: ScribeKeyboardView, label: String): Int {
         val provider = view.accessibilityNodeProvider!!
-        val childCount = provider.createAccessibilityNodeInfo(View.NO_ID)?.childCount ?: 0
-        return (0 until childCount).first { candidate ->
+        return view.visibleAccessibilityVirtualIds().first { candidate ->
             provider.createAccessibilityNodeInfo(candidate)?.contentDescription?.toString() == label
         }
     }
@@ -429,9 +444,7 @@ class KeyboardAccessibilityTest {
     @Suppress("DEPRECATION") // The virtual-key provider exposes parent-relative test bounds.
     private fun virtualKeyBounds(view: ScribeKeyboardView, label: String): Rect {
         val provider = view.accessibilityNodeProvider!!
-        val index = (0 until 64).first { candidate ->
-            provider.createAccessibilityNodeInfo(candidate)?.contentDescription?.toString() == label
-        }
+        val index = virtualKeyIndex(view, label)
         return Rect().also { provider.createAccessibilityNodeInfo(index)!!.getBoundsInParent(it) }
     }
 
