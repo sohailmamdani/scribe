@@ -25,6 +25,9 @@ androidApp/build/
 local.properties
 *.apk
 *.aab
+*.jks
+*.keystore
+keystore.properties
 
 # macOS
 .DS_Store

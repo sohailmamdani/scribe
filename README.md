@@ -112,6 +112,20 @@ Android builds require Android Studio's JDK and Android SDK 36:
 The debug APK is written to
 `androidApp/build/outputs/apk/debug/androidApp-debug.apk`.
 
+Production Android artifacts are signed only from environment-provided
+credentials; no keystore or password belongs in the repository. Set
+`SCRIBE_ANDROID_KEYSTORE_PATH` (an absolute path), `SCRIBE_ANDROID_KEYSTORE_PASSWORD`,
+`SCRIBE_ANDROID_KEY_ALIAS`, and `SCRIBE_ANDROID_KEY_PASSWORD`, along with
+`ANDROID_HOME`, then run:
+
+```bash
+scripts/build-android-release.sh
+```
+
+The script verifies that both release artifacts use the configured non-debug
+certificate, rejects any `INTERNET` permission, and prints the version, signer,
+and SHA-256 hashes needed for a Play Console handoff.
+
 ## Releasing (maintainer only)
 
 Releases are published via `scripts/release.sh <version>` which builds the app, creates a signed DMG, updates the Sparkle appcast, tags, and publishes a GitHub release. Requires the Sparkle private key in your macOS Keychain (one-time `tools/bin/generate_keys`).

@@ -4,6 +4,24 @@ plugins {
     alias(libs.plugins.composeCompiler)
 }
 
+val androidReleaseSigningEnvironment = mapOf(
+    "SCRIBE_ANDROID_KEYSTORE_PATH" to providers.environmentVariable("SCRIBE_ANDROID_KEYSTORE_PATH").orNull,
+    "SCRIBE_ANDROID_KEYSTORE_PASSWORD" to providers.environmentVariable("SCRIBE_ANDROID_KEYSTORE_PASSWORD").orNull,
+    "SCRIBE_ANDROID_KEY_ALIAS" to providers.environmentVariable("SCRIBE_ANDROID_KEY_ALIAS").orNull,
+    "SCRIBE_ANDROID_KEY_PASSWORD" to providers.environmentVariable("SCRIBE_ANDROID_KEY_PASSWORD").orNull,
+)
+val androidReleaseSigningConfigured = androidReleaseSigningEnvironment.values.any { !it.isNullOrBlank() }
+
+if (androidReleaseSigningConfigured) {
+    val missingVariables = androidReleaseSigningEnvironment
+        .filterValues { it.isNullOrBlank() }
+        .keys
+        .sorted()
+    check(missingVariables.isEmpty()) {
+        "Android release signing is partially configured. Missing: ${missingVariables.joinToString()}"
+    }
+}
+
 android {
     namespace = "com.sohail.scribe"
     compileSdk = 36
@@ -12,7 +30,7 @@ android {
         applicationId = "com.sohail.scribe"
         minSdk = 31
         targetSdk = 36
-        versionCode = 20
+        versionCode = 21
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -21,6 +39,25 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    signingConfigs {
+        if (androidReleaseSigningConfigured) {
+            create("release") {
+                storeFile = file(androidReleaseSigningEnvironment.getValue("SCRIBE_ANDROID_KEYSTORE_PATH")!!)
+                storePassword = androidReleaseSigningEnvironment.getValue("SCRIBE_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = androidReleaseSigningEnvironment.getValue("SCRIBE_ANDROID_KEY_ALIAS")
+                keyPassword = androidReleaseSigningEnvironment.getValue("SCRIBE_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            if (androidReleaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     compileOptions {

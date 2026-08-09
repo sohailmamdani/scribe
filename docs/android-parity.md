@@ -53,7 +53,7 @@ implementation and the listed runtime evidence exist.
 
 ## Current verified implementation
 
-As of Android `versionCode` 20, the repository has local automated evidence for:
+As of Android `versionCode` 21, the repository has local automated evidence for:
 
 - field profiles derived from `EditorInfo`, including numeric, decimal, signed,
   phone, date, time, email, URL, password, multiline, and search/action
@@ -129,6 +129,10 @@ As of Android `versionCode` 20, the repository has local automated evidence for:
   ignore the formatting request;
 - all 69 Android unit tests, all 24 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
+- environment-backed release signing that never persists credentials, plus a
+  release verifier that requires the configured upload certificate on both the
+  APK and AAB, rejects Android's debug certificate and any `INTERNET`
+  permission, and emits reproducible artifact hashes for distribution;
 - live IME correction of `teh` to `the ` and explicit restoration to `teh `,
   typing into Chrome's address field, and an in-place landscape session with
   Android reporting `mFullscreenMode=false`;
@@ -146,9 +150,10 @@ The emulator's package-manager low-storage threshold was reduced only for APK
 installation and instrumentation, then restored; no unrelated app data was
 deleted. The remaining release evidence is a physical-device TalkBack audit,
 airplane-mode dictation with audible speech, the complete two-third-party-app
-field matrix, physical tablet/foldable QA, a production-signed Android artifact,
-and Android tester distribution. Those rows remain open rather than inferred
-from emulator or unit-test results.
+field matrix, physical tablet/foldable QA, running the verified signing path
+with the actual production upload key, and Android tester distribution. Those
+rows remain open rather than inferred from emulator, unit-test, or temporary-key
+results.
 
 ## Known platform substitutions
 
