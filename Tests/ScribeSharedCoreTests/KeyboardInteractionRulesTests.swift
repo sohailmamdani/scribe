@@ -2,33 +2,43 @@ import XCTest
 @testable import ScribeSharedCore
 
 final class KeyboardInteractionRulesTests: XCTestCase {
-    func testSymbolPageTapScopeCanExcludeNumbers() {
+    func testSymbolPageTapScopeCanExcludeDigitsButStillIncludesSymbolsOnNumberPage() {
+        for digit in Array("0123456789") {
+            XCTAssertFalse(
+                KeyboardSymbolPageTapRules.shouldReturnToLetters(
+                    behavior: .returnToLetters,
+                    scope: .symbolsOnly,
+                    character: digit
+                )
+            )
+        }
+
+        let nonDigitKeys = (KeyboardSymbolLayouts.numbers + KeyboardSymbolLayouts.symbols)
+            .flatMap { $0 }
+            .filter { !$0.isNumber }
+        for symbol in nonDigitKeys {
+            XCTAssertTrue(
+                KeyboardSymbolPageTapRules.shouldReturnToLetters(
+                    behavior: .returnToLetters,
+                    scope: .symbolsOnly,
+                    character: symbol
+                ),
+                "Expected \(symbol) to return to letters"
+            )
+        }
+
         XCTAssertTrue(
             KeyboardSymbolPageTapRules.shouldReturnToLetters(
                 behavior: .returnToLetters,
                 scope: .numbersAndSymbols,
-                page: .numbers
-            )
-        )
-        XCTAssertFalse(
-            KeyboardSymbolPageTapRules.shouldReturnToLetters(
-                behavior: .returnToLetters,
-                scope: .symbolsOnly,
-                page: .numbers
-            )
-        )
-        XCTAssertTrue(
-            KeyboardSymbolPageTapRules.shouldReturnToLetters(
-                behavior: .returnToLetters,
-                scope: .symbolsOnly,
-                page: .symbols
+                character: "1"
             )
         )
         XCTAssertFalse(
             KeyboardSymbolPageTapRules.shouldReturnToLetters(
                 behavior: .stayOnCurrentPage,
                 scope: .numbersAndSymbols,
-                page: .symbols
+                character: "@"
             )
         )
     }

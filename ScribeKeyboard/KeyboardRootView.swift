@@ -680,7 +680,7 @@ struct KeyboardRootView: View {
             .accessibilityLabel("Period")
             .accessibilityHint("Tap for a period. Touch and hold, then slide for punctuation.")
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction { insertDelimiter(".") }
+            .accessibilityAction { commitPunctuation(".") }
     }
 
     private static let punctuationPopupGap: CGFloat = 8
@@ -757,8 +757,7 @@ struct KeyboardRootView: View {
         guard punctuationGestureIsActive else { return }
         let selection = punctuationSelection
         cancelPunctuationGesture()
-        insertDelimiter(String(selection ?? "."))
-        applySymbolPageTapBehavior()
+        commitPunctuation(selection ?? ".")
     }
 
     private func cancelPunctuationGesture() {
@@ -1094,7 +1093,7 @@ struct KeyboardRootView: View {
             if layout == .letters, character.isLetter, shiftState == .once {
                 shiftState = .off
             }
-            applySymbolPageTapBehavior()
+            applySymbolPageTapBehavior(after: character)
         case .shift:
             let now = Date()
             if let lastShiftTapAt,
@@ -1120,28 +1119,30 @@ struct KeyboardRootView: View {
            shiftState == .once {
             shiftState = .off
         }
-        applySymbolPageTapBehavior()
+        applySymbolPageTapBehavior(after: alternate)
         KeyboardHaptics.swipeCommit()
     }
 
-    private func applySymbolPageTapBehavior() {
+    private func commitPunctuation(_ punctuation: Character) {
+        insertDelimiter(String(punctuation))
+        applySymbolPageTapBehavior(after: punctuation)
+    }
+
+    private func applySymbolPageTapBehavior(after character: Character) {
         // The containing app can change this preference while iOS keeps the
         // keyboard extension process resident. Re-read at the actual symbol
         // commit boundary so the next tap honors the new scope immediately.
         documentState.refreshPreferences()
-        let page: KeyboardSymbolPageKind
         switch layout {
         case .letters:
             return
-        case .numbers:
-            page = .numbers
-        case .symbols:
-            page = .symbols
+        case .numbers, .symbols:
+            break
         }
         guard KeyboardSymbolPageTapRules.shouldReturnToLetters(
             behavior: documentState.preferences.symbolPageTapBehavior,
             scope: documentState.preferences.symbolPageTapScope,
-            page: page
+            character: character
         ) else { return }
         layout = .letters
         refreshAutomaticShift()

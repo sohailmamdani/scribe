@@ -98,23 +98,18 @@ enum KeyboardPunctuationPalette {
     }
 }
 
-enum KeyboardSymbolPageKind: Sendable, Equatable {
-    case numbers
-    case symbols
-}
-
 enum KeyboardSymbolPageTapRules {
     static func shouldReturnToLetters(
         behavior: KeyboardSymbolPageTapBehavior,
         scope: KeyboardSymbolPageTapScope,
-        page: KeyboardSymbolPageKind
+        character: Character
     ) -> Bool {
         guard behavior == .returnToLetters else { return false }
         switch scope {
         case .numbersAndSymbols:
             return true
         case .symbolsOnly:
-            return page == .symbols
+            return !character.isNumber
         }
     }
 }

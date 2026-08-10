@@ -56,7 +56,7 @@ struct KeyboardSettingsView: View {
             } header: {
                 Text("Symbols")
             } footer: {
-                Text("Choose whether this behavior applies to both the 123 and #+= pages, or only the #+= page.")
+                Text("Choose whether digits and symbols return to letters, or only symbols while 0–9 keep the 123 page open.")
             }
 
             Section("Typing") {
