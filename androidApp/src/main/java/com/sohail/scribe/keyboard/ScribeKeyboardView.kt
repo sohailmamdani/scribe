@@ -18,6 +18,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.customview.widget.ExploreByTouchHelper
 import com.sohail.scribe.core.KeyboardEditingRules
@@ -83,6 +84,10 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private val keys = mutableListOf<KeySpec>()
     private var hitRegions: Map<String, KeyboardHitRect> = emptyMap()
     private var keyAreaTop = 0f
+    private var keyAreaBottom = 0f
+    private var systemBottomInset = 0
+    private var layoutMode = KeyboardLayoutMode.COMPACT
+    private var splitDeadZone: RectF? = null
     private val swipePoints = mutableListOf<Pair<Float, Float>>()
     private val swipeKeys = mutableListOf<Char>()
     private var page = KeyboardPage.LETTERS
@@ -250,7 +255,41 @@ class ScribeKeyboardView(context: Context) : View(context) {
         isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         ViewCompat.setAccessibilityDelegate(this, accessibilityHelper)
+        ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
+            val navigation = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            val gestures = insets.getInsets(WindowInsetsCompat.Type.mandatorySystemGestures()).bottom
+            applySystemBottomInset(maxOf(navigation, gestures))
+            insets
+        }
     }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        ViewCompat.requestApplyInsets(this)
+    }
+
+    internal fun applySystemBottomInset(bottom: Int) {
+        val normalized = bottom.coerceAtLeast(0)
+        if (systemBottomInset == normalized) return
+        systemBottomInset = normalized
+        requestLayout()
+        rebuildKeys(width, height)
+        invalidate()
+    }
+
+    internal fun currentLayoutMode(): KeyboardLayoutMode = layoutMode
+
+    internal fun visualKeyRects(): Map<String, RectF> =
+        keys.associate { it.id to RectF(it.rect) }
+
+    internal fun splitDeadZoneRect(): RectF? = splitDeadZone?.let(::RectF)
+
+    internal fun systemBottomInsetForTesting(): Int = systemBottomInset
+
+    internal fun tapEvidenceForTesting(character: Char, x: Float, y: Float): KeyboardTapEvidence =
+        tapEvidence(character, x, y)
+
+    internal fun keyIdAtForTesting(x: Float, y: Float): String? = keyAt(x, y)?.id
 
     fun updatePreferences(value: KeyboardPreferences) {
         preferences = value.normalized()
@@ -344,7 +383,8 @@ class ScribeKeyboardView(context: Context) : View(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val desiredHeight = dp(if (landscape) 252f else 336f).toInt()
+        val desiredHeight = dp(KeyboardLayoutPolicy.geometry(landscape).contentHeightDp).toInt() +
+            systemBottomInset
         setMeasuredDimension(width, resolveSize(desiredHeight, heightMeasureSpec))
     }
 
@@ -366,7 +406,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val dark = isDarkMode()
-        canvas.drawColor(if (dark) Color.rgb(28, 29, 34) else Color.rgb(210, 213, 220))
+        canvas.drawColor(keyboardSurface(dark))
         drawToolbarBackground(canvas, dark)
         keys.forEach { drawKey(canvas, it, dark) }
         if (swipePoints.size > 1) drawSwipeTrail(canvas)
@@ -380,7 +420,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
 
     private fun drawToolbarBackground(canvas: Canvas, dark: Boolean) {
         val toolbarBottom = toolbarHeight()
-        paint.color = if (dark) Color.rgb(40, 41, 47) else Color.rgb(239, 240, 245)
+        paint.color = keyboardSurface(dark)
         paint.style = Paint.Style.FILL
         canvas.drawRect(0f, 0f, width.toFloat(), toolbarBottom, paint)
 
@@ -408,18 +448,24 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private fun drawKey(canvas: Canvas, key: KeySpec, dark: Boolean) {
         val pressed = currentKey?.id == key.id && !isSwiping
         val control = key.kind != KeyKind.TEXT && key.kind != KeyKind.SPACE && key.kind != KeyKind.SUGGESTION
-        paint.color = when {
-            !key.enabled -> if (dark) Color.rgb(62, 63, 69) else Color.rgb(190, 192, 198)
+        val capColor = when {
+            !key.enabled -> if (dark) Color.rgb(48, 51, 57) else Color.rgb(218, 221, 228)
             key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.LISTENING -> Color.rgb(210, 52, 66)
             key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.FAILED -> Color.rgb(194, 111, 0)
-            key.kind == KeyKind.MICROPHONE -> Color.rgb(82, 79, 205)
-            pressed -> if (dark) Color.rgb(106, 107, 115) else Color.rgb(183, 185, 191)
+            key.kind == KeyKind.MICROPHONE -> if (dark) Color.rgb(171, 185, 255) else Color.rgb(72, 91, 168)
+            pressed -> if (dark) Color.rgb(87, 91, 99) else Color.rgb(194, 200, 211)
             key.kind == KeyKind.SUGGESTION -> Color.TRANSPARENT
-            control -> if (dark) Color.rgb(74, 75, 82) else Color.rgb(174, 177, 185)
-            else -> if (dark) Color.rgb(85, 86, 93) else Color.rgb(248, 248, 251)
+            control -> if (dark) Color.rgb(61, 65, 73) else Color.rgb(211, 220, 234)
+            else -> if (dark) Color.rgb(52, 55, 62) else Color.rgb(229, 233, 241)
         }
+        if (key.kind != KeyKind.SUGGESTION) {
+            paint.color = if (dark) Color.argb(75, 0, 0, 0) else Color.argb(35, 50, 55, 65)
+            val shadow = RectF(key.rect).apply { offset(0f, dp(1.25f)) }
+            canvas.drawRoundRect(shadow, dp(6f), dp(6f), paint)
+        }
+        paint.color = capColor
         paint.style = Paint.Style.FILL
-        canvas.drawRoundRect(key.rect, dp(5f), dp(5f), paint)
+        canvas.drawRoundRect(key.rect, dp(6f), dp(6f), paint)
 
         paint.color = when {
             key.kind == KeyKind.MICROPHONE -> Color.WHITE
@@ -427,11 +473,18 @@ class ScribeKeyboardView(context: Context) : View(context) {
             else -> Color.rgb(25, 25, 30)
         }
         paint.textSize = when (key.kind) {
-            KeyKind.TEXT -> dp(21f)
+            KeyKind.TEXT -> dp(22f)
             KeyKind.SUGGESTION -> dp(15f)
+            KeyKind.SHIFT, KeyKind.DELETE -> dp(20f)
+            KeyKind.NEXT_INPUT, KeyKind.MICROPHONE -> dp(18f)
+            KeyKind.ENTER -> dp(if (key.label == KeyboardReturnAction.RETURN.label) 20f else 13f)
             else -> dp(15f)
         }
-        paint.typeface = if (key.kind == KeyKind.SUGGESTION) boldPaint.typeface else Typeface.DEFAULT
+        paint.typeface = if (key.kind == KeyKind.SUGGESTION) {
+            boldPaint.typeface
+        } else {
+            Typeface.create("sans-serif", Typeface.NORMAL)
+        }
         val baseline = key.rect.centerY() - (paint.ascent() + paint.descent()) / 2f
         canvas.drawText(displayLabel(key), key.rect.centerX(), baseline, paint)
 
@@ -450,7 +503,7 @@ class ScribeKeyboardView(context: Context) : View(context) {
         key.kind == KeyKind.DELETE -> "⌫"
         key.kind == KeyKind.ENTER && key.label == KeyboardReturnAction.RETURN.label -> "↵"
         key.kind == KeyKind.ENTER -> key.label
-        key.kind == KeyKind.NEXT_INPUT -> "◉"
+        key.kind == KeyKind.NEXT_INPUT -> "⌨"
         key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.LISTENING -> "■"
         key.kind == KeyKind.MICROPHONE && speechState == SpeechSessionState.FAILED -> "↻"
         key.kind == KeyKind.MICROPHONE && !key.enabled -> "…"
@@ -750,12 +803,15 @@ class ScribeKeyboardView(context: Context) : View(context) {
             )
 
     private fun tapEvidence(character: Char, touchX: Float, touchY: Float): KeyboardTapEvidence {
-        val distances = keys.asSequence().mapNotNull { key ->
-            val candidate = key.output?.lowercase()?.singleOrNull()?.takeIf(Char::isLetter) ?: return@mapNotNull null
+        val distances = mutableMapOf<Char, Double>()
+        keys.forEach { key ->
+            val candidate = key.output?.lowercase()?.singleOrNull()?.takeIf(Char::isLetter)
+                ?: return@forEach
             val horizontal = (touchX - key.rect.centerX()) / key.rect.width().coerceAtLeast(1f)
             val vertical = (touchY - key.rect.centerY()) / key.rect.height().coerceAtLeast(1f)
-            candidate to hypot(horizontal, vertical).toDouble()
-        }.toMap()
+            val distance = hypot(horizontal, vertical).toDouble()
+            distances[candidate] = minOf(distances[candidate] ?: Double.POSITIVE_INFINITY, distance)
+        }
         return KeyboardTapEvidence(character, distances)
     }
 
@@ -773,12 +829,34 @@ class ScribeKeyboardView(context: Context) : View(context) {
     private fun rebuildKeys(viewWidth: Int, viewHeight: Int) {
         if (viewWidth <= 0 || viewHeight <= 0) return
         keys.clear()
+        val configuration = resources.configuration
+        val widthDp = (viewWidth / density).toInt()
+        layoutMode = KeyboardLayoutPolicy.layoutMode(
+            widthDp = widthDp,
+            screenHeightDp = configuration.screenHeightDp,
+            splitWideLayoutsEnabled = preferences.splitWideLayoutsEnabled,
+        )
         buildToolbar(viewWidth)
-        val top = toolbarHeight() + dp(6f)
+        val geometry = KeyboardLayoutPolicy.geometry(
+            configuration.orientation == Configuration.ORIENTATION_LANDSCAPE,
+        )
+        val top = toolbarHeight() + dp(geometry.topGapDp)
         keyAreaTop = top
-        val bottomInset = dp(5f)
-        val rowGap = dp(6f)
-        val rowHeight = (viewHeight - top - bottomInset - rowGap * 3f) / 4f
+        val rowGap = dp(geometry.rowGapDp)
+        val availableRowHeight = (
+            viewHeight - systemBottomInset - top - dp(geometry.bottomPaddingDp) - rowGap * 3f
+        ) / 4f
+        val rowHeight = minOf(dp(geometry.keyHeightDp), availableRowHeight).coerceAtLeast(dp(36f))
+        keyAreaBottom = top + rowHeight * 4f + rowGap * 3f
+        splitDeadZone = if (
+            layoutMode == KeyboardLayoutMode.SPLIT &&
+            page in setOf(KeyboardPage.LETTERS, KeyboardPage.NUMBERS, KeyboardPage.SYMBOLS)
+        ) {
+            val metrics = splitMetrics(viewWidth)
+            RectF(metrics.leftRight, top, metrics.rightLeft, top + (rowHeight + rowGap) * 3f - rowGap)
+        } else {
+            null
+        }
         when (page) {
             KeyboardPage.LETTERS -> buildLetterRows(viewWidth, top, rowHeight, rowGap)
             KeyboardPage.NUMBERS -> buildSymbolRows(viewWidth, top, rowHeight, rowGap, false)
@@ -803,12 +881,24 @@ class ScribeKeyboardView(context: Context) : View(context) {
             }
         hitRegions = KeyboardHitGrid.regions(
             frames,
-            KeyboardHitRect(0f, keyAreaTop, viewWidth.toFloat(), viewHeight.toFloat()),
-        )
+            KeyboardHitRect(0f, keyAreaTop, viewWidth.toFloat(), keyAreaBottom),
+        ).mapValues { (id, region) ->
+            val deadZone = splitDeadZone
+            val key = keys.firstOrNull { it.id == id }
+            if (deadZone == null || key == null || key.rect.bottom > deadZone.bottom + 1f) {
+                region
+            } else if (key.rect.centerX() < deadZone.left) {
+                region.copy(right = minOf(region.right, deadZone.left))
+            } else {
+                region.copy(left = maxOf(region.left, deadZone.right))
+            }
+        }
     }
 
     private fun keyAt(x: Float, y: Float): KeySpec? {
         if (y < keyAreaTop) return keys.lastOrNull { it.rect.contains(x, y) }
+        if (y > keyAreaBottom) return null
+        if (splitDeadZone?.contains(x, y) == true) return null
         val bias = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
             KeyboardHitGrid.COMPACT_VERTICAL_TAP_BIAS
         } else {
@@ -895,6 +985,10 @@ class ScribeKeyboardView(context: Context) : View(context) {
     }
 
     private fun buildLetterRows(viewWidth: Int, top: Float, rowHeight: Float, rowGap: Float) {
+        if (layoutMode == KeyboardLayoutMode.SPLIT) {
+            buildSplitLetterRows(viewWidth, top, rowHeight, rowGap)
+            return
+        }
         addCharacterRow("qwertyuiop", viewWidth, top, rowHeight, 0.02f)
         addCharacterRow("asdfghjkl", viewWidth, top + rowHeight + rowGap, rowHeight, 0.06f)
 
@@ -904,6 +998,75 @@ class ScribeKeyboardView(context: Context) : View(context) {
         addCharacterRow("zxcvbnm", viewWidth, thirdTop, rowHeight, 0.15f, sideWidth + dp(3f))
         keys += KeySpec("delete", "Delete", kind = KeyKind.DELETE, rect = RectF(viewWidth - dp(4f) - sideWidth, thirdTop, viewWidth - dp(4f), thirdTop + rowHeight))
         addBottomRow(viewWidth, top + (rowHeight + rowGap) * 3f, rowHeight, "123")
+    }
+
+    private fun buildSplitLetterRows(viewWidth: Int, top: Float, rowHeight: Float, rowGap: Float) {
+        addSplitCharacterRow("qwert", "yuiop", viewWidth, top, rowHeight)
+        addSplitCharacterRow("asdfg", "ghjkl", viewWidth, top + rowHeight + rowGap, rowHeight)
+
+        val thirdTop = top + (rowHeight + rowGap) * 2f
+        val metrics = splitMetrics(viewWidth)
+        val slotWidth = metrics.slotWidth(5, dp(6f))
+        addKeyInSlot("shift", "Shift", KeyKind.SHIFT, metrics.left, thirdTop, slotWidth, rowHeight)
+        addSplitCharactersInSlots("zxcv", metrics.left, 1, thirdTop, slotWidth, rowHeight)
+        addSplitCharactersInSlots("vbnm", metrics.rightLeft, 0, thirdTop, slotWidth, rowHeight)
+        addKeyInSlot(
+            "delete",
+            "Delete",
+            KeyKind.DELETE,
+            metrics.rightLeft + 4f * (slotWidth + dp(6f)),
+            thirdTop,
+            slotWidth,
+            rowHeight,
+        )
+        addBottomRow(viewWidth, top + (rowHeight + rowGap) * 3f, rowHeight, "123")
+    }
+
+    private fun addSplitCharacterRow(
+        leftLetters: String,
+        rightLetters: String,
+        viewWidth: Int,
+        top: Float,
+        rowHeight: Float,
+    ) {
+        val metrics = splitMetrics(viewWidth)
+        val slotCount = maxOf(leftLetters.length, rightLetters.length)
+        val slotWidth = metrics.slotWidth(slotCount, dp(6f))
+        addSplitCharactersInSlots(leftLetters, metrics.left, 0, top, slotWidth, rowHeight)
+        addSplitCharactersInSlots(rightLetters, metrics.rightLeft, 0, top, slotWidth, rowHeight)
+    }
+
+    private fun addSplitCharactersInSlots(
+        letters: String,
+        start: Float,
+        firstSlot: Int,
+        top: Float,
+        slotWidth: Float,
+        rowHeight: Float,
+    ) {
+        letters.forEachIndexed { index, character ->
+            val left = start + (firstSlot + index) * (slotWidth + dp(6f))
+            val output = character.toString()
+            keys += KeySpec(
+                id = "key-$character-${if (start < width / 2f) "left" else "right"}",
+                label = if (shift == ShiftState.OFF) output else output.uppercase(),
+                output = output,
+                rect = RectF(left, top, left + slotWidth, top + rowHeight),
+                alternate = KeyboardAlternateSymbols.alternateFor(character),
+            )
+        }
+    }
+
+    private fun addKeyInSlot(
+        id: String,
+        label: String,
+        kind: KeyKind,
+        left: Float,
+        top: Float,
+        width: Float,
+        height: Float,
+    ) {
+        keys += KeySpec(id, label, kind = kind, rect = RectF(left, top, left + width, top + height))
     }
 
     private fun addCharacterRow(
@@ -932,6 +1095,10 @@ class ScribeKeyboardView(context: Context) : View(context) {
 
     private fun buildSymbolRows(viewWidth: Int, top: Float, rowHeight: Float, rowGap: Float, symbols: Boolean) {
         val layout = if (symbols) SYMBOL_ROWS else NUMBER_ROWS
+        if (layoutMode == KeyboardLayoutMode.SPLIT) {
+            buildSplitSymbolRows(layout, viewWidth, top, rowHeight, rowGap, symbols)
+            return
+        }
         addTextRow(layout[0], viewWidth, top, rowHeight, dp(4f), allowsAlternates = !symbols)
         addTextRow(layout[1], viewWidth, top + rowHeight + rowGap, rowHeight, dp(4f))
         val thirdTop = top + (rowHeight + rowGap) * 2f
@@ -945,6 +1112,82 @@ class ScribeKeyboardView(context: Context) : View(context) {
         addTextRow(layout[2], viewWidth, thirdTop, rowHeight, sideWidth + dp(11f))
         keys += KeySpec("delete", "Delete", kind = KeyKind.DELETE, rect = RectF(viewWidth - dp(4f) - sideWidth, thirdTop, viewWidth - dp(4f), thirdTop + rowHeight))
         addBottomRow(viewWidth, top + (rowHeight + rowGap) * 3f, rowHeight, "ABC")
+    }
+
+    private fun buildSplitSymbolRows(
+        layout: List<List<String>>,
+        viewWidth: Int,
+        top: Float,
+        rowHeight: Float,
+        rowGap: Float,
+        symbols: Boolean,
+    ) {
+        addSplitTextRow(layout[0], viewWidth, top, rowHeight, allowsAlternates = !symbols)
+        addSplitTextRow(layout[1], viewWidth, top + rowHeight + rowGap, rowHeight)
+        val thirdTop = top + (rowHeight + rowGap) * 2f
+        val metrics = splitMetrics(viewWidth)
+        val slotWidth = metrics.slotWidth(5, dp(6f))
+        addKeyInSlot(
+            "more-symbols",
+            if (symbols) "123" else "#+=",
+            KeyKind.MORE_SYMBOLS,
+            metrics.left,
+            thirdTop,
+            slotWidth,
+            rowHeight,
+        )
+        addTextValuesInSlots(layout[2].take(2), metrics.left, 1, thirdTop, slotWidth, rowHeight)
+        addTextValuesInSlots(layout[2].drop(2), metrics.rightLeft, 0, thirdTop, slotWidth, rowHeight)
+        addKeyInSlot(
+            "delete",
+            "Delete",
+            KeyKind.DELETE,
+            metrics.rightLeft + 4f * (slotWidth + dp(6f)),
+            thirdTop,
+            slotWidth,
+            rowHeight,
+        )
+        addBottomRow(viewWidth, top + (rowHeight + rowGap) * 3f, rowHeight, "ABC")
+    }
+
+    private fun addSplitTextRow(
+        values: List<String>,
+        viewWidth: Int,
+        top: Float,
+        rowHeight: Float,
+        allowsAlternates: Boolean = false,
+    ) {
+        val metrics = splitMetrics(viewWidth)
+        val leftValues = values.take((values.size + 1) / 2)
+        val rightValues = values.drop(leftValues.size)
+        val slotWidth = metrics.slotWidth(5, dp(6f))
+        addTextValuesInSlots(leftValues, metrics.left, 0, top, slotWidth, rowHeight, allowsAlternates)
+        addTextValuesInSlots(rightValues, metrics.rightLeft, 5 - rightValues.size, top, slotWidth, rowHeight, allowsAlternates)
+    }
+
+    private fun addTextValuesInSlots(
+        values: List<String>,
+        start: Float,
+        firstSlot: Int,
+        top: Float,
+        slotWidth: Float,
+        rowHeight: Float,
+        allowsAlternates: Boolean = false,
+    ) {
+        values.forEachIndexed { index, value ->
+            val left = start + (firstSlot + index) * (slotWidth + dp(6f))
+            keys += KeySpec(
+                id = "symbol-$value-${if (start < width / 2f) "left" else "right"}-$index-${top.toInt()}",
+                label = value,
+                output = value,
+                rect = RectF(left, top, left + slotWidth, top + rowHeight),
+                alternate = if (allowsAlternates) {
+                    value.singleOrNull()?.let(KeyboardAlternateSymbols::alternateFor)
+                } else {
+                    null
+                },
+            )
+        }
     }
 
     private fun buildNumberPad(viewWidth: Int, top: Float, rowHeight: Float, rowGap: Float) {
@@ -1032,6 +1275,10 @@ class ScribeKeyboardView(context: Context) : View(context) {
     }
 
     private fun addBottomRow(viewWidth: Int, top: Float, rowHeight: Float, modeLabel: String) {
+        if (layoutMode == KeyboardLayoutMode.SPLIT) {
+            addSplitBottomRow(viewWidth, top, rowHeight, modeLabel)
+            return
+        }
         val gap = dp(5f)
         val inset = dp(4f)
         val modeWidth = dp(54f)
@@ -1068,6 +1315,55 @@ class ScribeKeyboardView(context: Context) : View(context) {
         )
     }
 
+    private fun addSplitBottomRow(viewWidth: Int, top: Float, rowHeight: Float, modeLabel: String) {
+        val gap = dp(6f)
+        val metrics = splitMetrics(viewWidth)
+        val controlWidth = metrics.slotWidth(5, gap)
+        var left = metrics.left
+        keys += KeySpec(
+            "mode",
+            modeLabel,
+            kind = KeyKind.MODE,
+            rect = RectF(left, top, left + controlWidth, top + rowHeight),
+        )
+        left += controlWidth + gap
+        if (offersInputModeSwitch) {
+            keys += KeySpec(
+                "next",
+                "Next",
+                kind = KeyKind.NEXT_INPUT,
+                rect = RectF(left, top, left + controlWidth, top + rowHeight),
+            )
+            left += controlWidth + gap
+        }
+
+        val punctuation = when (fieldProfile.layout) {
+            KeyboardFieldLayout.EMAIL -> "@"
+            KeyboardFieldLayout.URI -> "/"
+            else -> "."
+        }
+        val returnLeft = viewWidth - metrics.left - controlWidth
+        val punctuationLeft = returnLeft - gap - controlWidth
+        keys += KeySpec(
+            "space",
+            "space",
+            kind = KeyKind.SPACE,
+            rect = RectF(left, top, punctuationLeft - gap, top + rowHeight),
+        )
+        keys += KeySpec(
+            if (punctuation == ".") "period" else "field-punctuation",
+            punctuation,
+            output = punctuation,
+            rect = RectF(punctuationLeft, top, punctuationLeft + controlWidth, top + rowHeight),
+        )
+        keys += KeySpec(
+            "return",
+            fieldProfile.returnAction.label,
+            kind = KeyKind.ENTER,
+            rect = RectF(returnLeft, top, returnLeft + controlWidth, top + rowHeight),
+        )
+    }
+
     private fun punctuationPopupRect(period: KeySpec): RectF {
         val width = minOf(dp(320f), period.rect.right - dp(6f))
         val height = dp(84f)
@@ -1090,9 +1386,36 @@ class ScribeKeyboardView(context: Context) : View(context) {
         audioManager?.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.45f)
     }
 
-    private fun toolbarHeight() = dp(52f)
+    private fun splitMetrics(viewWidth: Int): SplitMetrics {
+        val outerInset = dp(6f)
+        val gap = dp(KeyboardLayoutPolicy.splitGapDp(viewWidth / density))
+        return SplitMetrics(
+            left = outerInset,
+            leftRight = (viewWidth - gap) / 2f,
+            rightLeft = (viewWidth + gap) / 2f,
+            right = viewWidth - outerInset,
+        )
+    }
+
+    private fun toolbarHeight() = dp(
+        KeyboardLayoutPolicy.geometry(
+            resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE,
+        ).toolbarHeightDp,
+    )
     private fun dp(value: Float) = value * density
     private fun isDarkMode() = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    private fun keyboardSurface(dark: Boolean) =
+        if (dark) Color.rgb(28, 30, 34) else Color.rgb(244, 246, 251)
+
+    private data class SplitMetrics(
+        val left: Float,
+        val leftRight: Float,
+        val rightLeft: Float,
+        val right: Float,
+    ) {
+        fun slotWidth(slotCount: Int, gap: Float): Float =
+            (leftRight - left - gap * (slotCount - 1)) / slotCount
+    }
 
     private fun KeyKind.isToolbarControl(): Boolean = when (this) {
         KeyKind.MICROPHONE, KeyKind.CANCEL, KeyKind.UNDO_DICTATION,

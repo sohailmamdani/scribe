@@ -79,6 +79,18 @@ As of Android `versionCode` 21, the repository has local automated evidence for:
 - gap-free touch regions that meet halfway across visual cap spacing, extend
   outer keys to the keyboard edges, compensate for vertical finger aim, and
   stop resolving after the finger leaves the keyboard;
+- target-SDK-36 edge-to-edge handling that reserves the live navigation-bar or
+  mandatory-gesture inset below the last key row, keeps that strip
+  non-interactive, and matches its surface color so Android's gesture handle,
+  dismiss affordance, and native keyboard picker never overlap a key;
+- fixed Gboard-scale key geometry (48 dp portrait caps and 42 dp landscape
+  caps) rather than stretching rows to fill an arbitrary IME height, with a
+  restrained Material surface, consistent 6 dp gutters, and larger editing
+  glyphs;
+- a default-on, user-disableable split layout for unfolded foldables and
+  tablets: the three typing rows move into equal thumb clusters around a dead
+  center zone, G and V are duplicated on both halves like Gboard, symbol pages
+  preserve the split, and the spacebar remains continuous across the bottom;
 - a visible, TalkBack-labelled one-tap autocorrection undo for both automatic
   and manually selected candidates, plus character-evidence preservation while
   deleting within a word;
@@ -127,7 +139,7 @@ As of Android `versionCode` 21, the repository has local automated evidence for:
   documented formatted/raw pair checked by the same word-subsequence
   faithfulness rule as iOS, and a singleton fallback for recognizers that
   ignore the formatting request;
-- all 69 Android unit tests, all 24 instrumentation tests on an API 36 emulator,
+- all 74 Android unit tests, all 29 instrumentation tests on an API 36 emulator,
   APK assembly, lint, and a manifest with no `INTERNET` permission;
 - environment-backed release signing that never persists credentials, plus a
   release verifier that requires the configured upload certificate on both the
@@ -141,10 +153,11 @@ As of Android `versionCode` 21, the repository has local automated evidence for:
   manually shifted `The` swipe;
 - live Chrome verification that a deliberate space-bar drag changes the host
   selection and inserts the next character before the untouched trailing text;
-- live version-19 emulator rendering at 1280×800 dp tablet landscape and an
-  841×701 dp unfolded-foldable analogue, with the app, complete four-row IME,
-  alternates, toolbar, and input-mode switch visible without clipping or an
-  extract editor.
+- live API 36 emulator rendering at phone portrait and an 841×701 dp
+  unfolded-foldable analogue, with fixed-height phone caps, the native gesture
+  and keyboard-picker strip clear below the keys, and the Gboard-style split
+  rows, duplicated center letters, continuous spacebar, toolbar, and
+  input-mode switch visible without clipping or an extract editor.
 
 The emulator's package-manager low-storage threshold was reduced only for APK
 installation and instrumentation, then restored; no unrelated app data was

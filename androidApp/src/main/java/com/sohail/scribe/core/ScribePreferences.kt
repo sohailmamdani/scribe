@@ -17,6 +17,7 @@ data class KeyboardPreferences(
     val autocorrectionEnabled: Boolean = true,
     val swipeTypingEnabled: Boolean = true,
     val enhancedPunctuationEnabled: Boolean = true,
+    val splitWideLayoutsEnabled: Boolean = true,
 ) {
     fun normalized() = copy(alternateHoldDelayMillis = alternateHoldDelayMillis.coerceIn(250, 1_200))
 }
@@ -41,6 +42,7 @@ class ScribePreferences(context: Context) {
             autocorrectionEnabled = store.getBoolean(KEY_AUTOCORRECTION, true),
             swipeTypingEnabled = store.getBoolean(KEY_SWIPE, true),
             enhancedPunctuationEnabled = store.getBoolean(KEY_ENHANCED_PUNCTUATION, true),
+            splitWideLayoutsEnabled = store.getBoolean(KEY_SPLIT_WIDE_LAYOUTS, true),
         ).normalized()
         set(value) {
             val normalized = value.normalized()
@@ -55,6 +57,7 @@ class ScribePreferences(context: Context) {
                 .putBoolean(KEY_AUTOCORRECTION, normalized.autocorrectionEnabled)
                 .putBoolean(KEY_SWIPE, normalized.swipeTypingEnabled)
                 .putBoolean(KEY_ENHANCED_PUNCTUATION, normalized.enhancedPunctuationEnabled)
+                .putBoolean(KEY_SPLIT_WIDE_LAYOUTS, normalized.splitWideLayoutsEnabled)
                 .apply()
         }
 
@@ -74,5 +77,6 @@ class ScribePreferences(context: Context) {
         private const val KEY_AUTOCORRECTION = "keyboard.autocorrection"
         private const val KEY_SWIPE = "keyboard.swipeTyping"
         private const val KEY_ENHANCED_PUNCTUATION = "dictation.enhancedPunctuation"
+        private const val KEY_SPLIT_WIDE_LAYOUTS = "keyboard.splitWideLayouts"
     }
 }

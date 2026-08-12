@@ -2,6 +2,8 @@ package com.sohail.scribe.keyboard
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Color
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +13,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import com.sohail.scribe.core.DictationHistoryStore
 import com.sohail.scribe.core.KeyboardEditingRules
 import com.sohail.scribe.core.KeyboardPreferences
@@ -60,6 +63,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onCreate() {
         super.onCreate()
+        configureImeWindow()
         preferencesStore = ScribePreferences(this)
         historyStore = DictationHistoryStore(this)
         recoverableDictationStore = RecoverableDictationStore(this)
@@ -82,6 +86,7 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
     }
 
     override fun onCreateInputView(): View = ScribeKeyboardView(this).also { view ->
+        configureImeWindow()
         keyboardView = view
         view.listener = this
         view.updatePreferences(preferences)
@@ -93,6 +98,26 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
         )
         view.updateAutocorrectionUndoOriginal(lastCorrection?.original)
         updateAutomaticShift()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        configureImeWindow()
+    }
+
+    @Suppress("DEPRECATION") // Required for a matching three-button navigation-bar scrim.
+    private fun configureImeWindow() {
+        val hostWindow = window.window ?: return
+        WindowCompat.setDecorFitsSystemWindows(hostWindow, false)
+        val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
+        hostWindow.navigationBarColor = if (dark) {
+            Color.rgb(28, 30, 34)
+        } else {
+            Color.rgb(244, 246, 251)
+        }
+        WindowCompat.getInsetsController(hostWindow, hostWindow.decorView)
+            .isAppearanceLightNavigationBars = !dark
     }
 
     /** Keep the custom keyboard visible in landscape instead of Android's extract editor. */

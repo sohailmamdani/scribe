@@ -623,6 +623,15 @@ private fun KeyboardSettingsPage(
         item { SettingsToggle("Swipe typing", preferences.swipeTypingEnabled) { onChanged(preferences.copy(swipeTypingEnabled = it)) } }
         item { SettingsToggle("Double-space period", preferences.doubleSpacePeriodEnabled) { onChanged(preferences.copy(doubleSpacePeriodEnabled = it)) } }
         item { SettingsToggle("Key pop-up previews", preferences.keyPreviewsEnabled) { onChanged(preferences.copy(keyPreviewsEnabled = it)) } }
+        item {
+            SettingsToggle(
+                title = "Split keyboard on wide screens",
+                checked = preferences.splitWideLayoutsEnabled,
+                detail = "Moves letters into two thumb-reachable groups on unfolded foldables and tablets.",
+            ) {
+                onChanged(preferences.copy(splitWideLayoutsEnabled = it))
+            }
+        }
         item { SettingsHeader("Symbols") }
         item { SettingsToggle("Alternate symbols", preferences.alternateSymbolsEnabled) { onChanged(preferences.copy(alternateSymbolsEnabled = it)) } }
         item {
