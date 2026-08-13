@@ -170,7 +170,7 @@ class KeyboardAccessibilityTest {
             view.onTouchEvent(MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, bounds.exactCenterX(), bounds.exactCenterY(), 0))
             assertTrue(
                 view.accessibilityNodeProvider
-                    ?.createAccessibilityNodeInfo(virtualKeyIndex(view, "Q, alternate 1"))
+                    ?.createAccessibilityNodeInfo(virtualKeyIndex(view, "Q, alternate Percent sign"))
                     ?.contentDescription
                     ?.toString()
                     ?.startsWith("Q") == true,
@@ -247,10 +247,10 @@ class KeyboardAccessibilityTest {
             val provider = view.accessibilityNodeProvider
             assertNotNull(provider)
             val firstKey = provider!!.createAccessibilityNodeInfo(
-                virtualKeyIndex(view, "q, alternate 1"),
+                virtualKeyIndex(view, "q, alternate Percent sign"),
             )
             assertNotNull(firstKey)
-            assertEquals("q, alternate 1", firstKey!!.contentDescription.toString())
+            assertEquals("q, alternate Percent sign", firstKey!!.contentDescription.toString())
         }
     }
 
@@ -356,16 +356,16 @@ class KeyboardAccessibilityTest {
             val view = measuredKeyboardView(instrumentation.targetContext, listener)
             val provider = view.accessibilityNodeProvider!!
             val microphoneId = virtualKeyIndex(view, "Start dictation")
-            val qwertyId = virtualKeyIndex(view, "Q, alternate 1")
-            val qwertyBounds = virtualKeyBounds(view, "Q, alternate 1")
+            val qwertyId = virtualKeyIndex(view, "Q, alternate Percent sign")
+            val qwertyBounds = virtualKeyBounds(view, "Q, alternate Percent sign")
             view.updateRecoverableDictationAvailability(true)
 
             val labels = virtualKeyLabels(view)
             assertTrue("Insert finished dictation" in labels)
             assertTrue("Discard the finished dictation" in labels)
             assertFalse("Start dictation" in labels)
-            assertEquals(qwertyId, virtualKeyIndex(view, "Q, alternate 1"))
-            assertEquals(qwertyBounds, virtualKeyBounds(view, "Q, alternate 1"))
+            assertEquals(qwertyId, virtualKeyIndex(view, "Q, alternate Percent sign"))
+            assertEquals(qwertyBounds, virtualKeyBounds(view, "Q, alternate Percent sign"))
             val staleMicrophone = provider.createAccessibilityNodeInfo(microphoneId)!!
             assertEquals("Unavailable keyboard control", staleMicrophone.contentDescription.toString())
             assertFalse(staleMicrophone.isEnabled)
@@ -470,6 +470,8 @@ class KeyboardAccessibilityTest {
         override fun onSuggestion(candidate: CorrectionCandidate) = Unit
         override fun onUndoAutocorrection() = Unit
         override fun onNextInputMethod() = Unit
+        override fun onOpenSettings() = Unit
+        override fun onToggleSplitMode(enabled: Boolean) = Unit
         override fun onToggleDictation() { dictationToggles += 1 }
         override fun onCancelDictation() = Unit
         override fun onUndoDictation() = Unit

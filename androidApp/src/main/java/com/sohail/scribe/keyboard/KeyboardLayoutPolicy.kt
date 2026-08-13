@@ -10,7 +10,7 @@ data class KeyboardGeometry(
     val bottomPaddingDp: Float,
 ) {
     val contentHeightDp: Float
-        get() = toolbarHeightDp + topGapDp + keyHeightDp * 4f + rowGapDp * 3f + bottomPaddingDp
+        get() = toolbarHeightDp + topGapDp + keyHeightDp * 5f + rowGapDp * 4f + bottomPaddingDp
 }
 
 /** Pure layout decisions kept outside the View so phone/foldable geometry is JVM-testable. */
@@ -19,9 +19,9 @@ object KeyboardLayoutPolicy {
     const val MINIMUM_SPLIT_SCREEN_HEIGHT_DP = 480
 
     val portraitGeometry = KeyboardGeometry(
-        toolbarHeightDp = 48f,
-        keyHeightDp = 48f,
-        rowGapDp = 6f,
+        toolbarHeightDp = 56f,
+        keyHeightDp = 43f,
+        rowGapDp = 7f,
         topGapDp = 6f,
         bottomPaddingDp = 8f,
     )
@@ -29,7 +29,7 @@ object KeyboardLayoutPolicy {
     val landscapeGeometry = KeyboardGeometry(
         toolbarHeightDp = 44f,
         keyHeightDp = 42f,
-        rowGapDp = 5f,
+        rowGapDp = 9f,
         topGapDp = 5f,
         bottomPaddingDp = 6f,
     )
@@ -51,5 +51,8 @@ object KeyboardLayoutPolicy {
         KeyboardLayoutMode.COMPACT
     }
 
-    fun splitGapDp(widthDp: Float): Float = (widthDp * 0.17f).coerceIn(88f, 180f)
+    /** Matches the supplied Gboard foldable reference: a deliberately large thumb-reach void. */
+    fun splitGapDp(widthDp: Float): Float = widthDp * 0.42f
+
+    fun splitOuterInsetDp(widthDp: Float): Float = widthDp * 0.042f
 }

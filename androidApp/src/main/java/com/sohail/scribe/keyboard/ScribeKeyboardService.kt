@@ -1,6 +1,7 @@
 package com.sohail.scribe.keyboard
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
@@ -429,6 +430,19 @@ class ScribeKeyboardService : InputMethodService(), KeyboardActionListener, Spee
 
     override fun onNextInputMethod() {
         switchToNextInputMethod(false)
+    }
+
+    override fun onOpenSettings() {
+        startActivity(
+            Intent(this, com.sohail.scribe.MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+
+    override fun onToggleSplitMode(enabled: Boolean) {
+        preferences = preferences.copy(splitWideLayoutsEnabled = enabled)
+        preferencesStore.keyboard = preferences
+        keyboardView?.updatePreferences(preferences)
     }
 
     override fun onToggleDictation() {

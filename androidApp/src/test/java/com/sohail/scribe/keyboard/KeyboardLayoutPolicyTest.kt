@@ -35,14 +35,15 @@ class KeyboardLayoutPolicyTest {
     }
 
     @Test fun fixedGeometryDoesNotStretchWithWindowHeight() {
-        assertEquals(272f, KeyboardLayoutPolicy.portraitGeometry.contentHeightDp)
-        assertEquals(238f, KeyboardLayoutPolicy.landscapeGeometry.contentHeightDp)
+        assertEquals(313f, KeyboardLayoutPolicy.portraitGeometry.contentHeightDp)
+        assertEquals(301f, KeyboardLayoutPolicy.landscapeGeometry.contentHeightDp)
         assertTrue(KeyboardLayoutPolicy.portraitGeometry.keyHeightDp < 50f)
     }
 
     @Test fun splitGapTracksWidthWithinErgonomicBounds() {
-        assertEquals(102f, KeyboardLayoutPolicy.splitGapDp(600f))
-        assertEquals(180f, KeyboardLayoutPolicy.splitGapDp(1_280f))
-        assertEquals(88f, KeyboardLayoutPolicy.splitGapDp(400f))
+        assertEquals(252f, KeyboardLayoutPolicy.splitGapDp(600f), 0.01f)
+        assertEquals(537.6f, KeyboardLayoutPolicy.splitGapDp(1_280f), 0.01f)
+        assertEquals(168f, KeyboardLayoutPolicy.splitGapDp(400f), 0.01f)
+        assertEquals(53.76f, KeyboardLayoutPolicy.splitOuterInsetDp(1_280f), 0.01f)
     }
 }

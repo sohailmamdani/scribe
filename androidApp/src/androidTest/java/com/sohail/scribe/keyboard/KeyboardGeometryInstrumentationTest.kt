@@ -25,9 +25,11 @@ class KeyboardGeometryInstrumentationTest {
             )
 
             assertEquals(KeyboardLayoutMode.COMPACT, view.currentLayoutMode())
+            val one = requireNotNull(view.visualKeyRects()["number-1"])
             val q = requireNotNull(view.visualKeyRects()["key-q"])
-            assertTrue(abs(q.height() - 48f * density) < 1.5f)
-            assertTrue(abs(view.measuredHeight - 272f * density) < 2f)
+            assertTrue(one.bottom < q.top)
+            assertTrue(abs(q.height() - 43f * density) < 1.5f)
+            assertTrue(abs(view.measuredHeight - 313f * density) < 2f)
         }
     }
 
@@ -61,9 +63,10 @@ class KeyboardGeometryInstrumentationTest {
             assertEquals(KeyboardLayoutMode.SPLIT, view.currentLayoutMode())
             val gap = requireNotNull(view.splitDeadZoneRect())
             val rects = view.visualKeyRects()
-            assertTrue(gap.width() >= 88f * density)
-            assertTrue(requireNotNull(rects["key-t-left"]).right <= gap.left)
-            assertTrue(requireNotNull(rects["key-y-right"]).left >= gap.right)
+            assertTrue(abs(gap.width() - view.width * 0.42f) < 2f)
+            assertTrue(abs(requireNotNull(rects["symbol-1-left-0-${gap.top.toInt()}"]).left - view.width * 0.042f) < 2f)
+            assertTrue(requireNotNull(rects["key-t-left"]).right <= gap.left + 2f)
+            assertTrue(requireNotNull(rects["key-y-right"]).left >= gap.right - 2f)
             assertNotNull(rects["key-g-left"])
             assertNotNull(rects["key-g-right"])
             assertNotNull(rects["key-v-left"])
@@ -95,7 +98,7 @@ class KeyboardGeometryInstrumentationTest {
             val gap = requireNotNull(view.splitDeadZoneRect())
             val symbolCaps = view.visualKeyRects().filterKeys { it.startsWith("symbol-") }.values
             assertTrue(symbolCaps.isNotEmpty())
-            assertTrue(symbolCaps.none { it.left < gap.right && it.right > gap.left })
+            assertTrue(symbolCaps.none { it.left < gap.right - 2f && it.right > gap.left + 2f })
         }
     }
 
