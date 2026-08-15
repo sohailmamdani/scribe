@@ -17,6 +17,21 @@ class OnDeviceRecognizerIntentInstrumentationTest {
         assertEquals(1, intent.getIntExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 0))
         assertTrue(intent.getBooleanExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false))
         assertEquals(
+            MANUAL_DICTATION_WINDOW_MILLIS,
+            intent.getIntExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 0),
+        )
+        assertEquals(
+            MANUAL_DICTATION_WINDOW_MILLIS,
+            intent.getIntExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                0,
+            ),
+        )
+        assertEquals(
+            RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS,
+            intent.getStringExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION),
+        )
+        assertEquals(
             RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY,
             intent.getStringExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING),
         )
@@ -34,6 +49,11 @@ class OnDeviceRecognizerIntentInstrumentationTest {
         assertTrue(intent.getBooleanExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false))
         assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING))
         assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION))
+        assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION))
+        assertEquals(
+            MANUAL_DICTATION_WINDOW_MILLIS,
+            intent.getIntExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 0),
+        )
     }
 
     @Test fun modelSupportIntentDoesNotRequireTheOptionalFormatter() {
@@ -41,11 +61,14 @@ class OnDeviceRecognizerIntentInstrumentationTest {
             "en-US",
             sdkInt = 33,
             enableFormatting = false,
+            manualEndpointing = false,
         )
 
         assertTrue(intent.getBooleanExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false))
         assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING))
         assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION))
+        assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS))
+        assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION))
     }
 
     @Test fun userOptOutKeepsOnDeviceRecognitionWithoutFormattingExtras() {
@@ -58,5 +81,6 @@ class OnDeviceRecognizerIntentInstrumentationTest {
         assertTrue(intent.getBooleanExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false))
         assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING))
         assertFalse(intent.hasExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION))
+        assertTrue(intent.hasExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION))
     }
 }

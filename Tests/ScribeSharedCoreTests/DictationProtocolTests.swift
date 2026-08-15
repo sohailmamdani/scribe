@@ -80,6 +80,51 @@ final class DictationProtocolTests: XCTestCase {
         )
     }
 
+    func testRecordingProgressRefreshesStatusWithoutChangingItsMeaning() {
+        let startedAt = Date(timeIntervalSince1970: 1_000)
+        let refreshedAt = startedAt.addingTimeInterval(2)
+        store.publishStatus(
+            for: "request-1",
+            processID: "process-1",
+            phase: .recording,
+            message: "Listening…",
+            at: startedAt
+        )
+
+        store.refreshInFlightStatus(
+            for: "request-1",
+            processID: "process-1",
+            phase: .recording,
+            at: refreshedAt
+        )
+
+        XCTAssertEqual(store.status.phase, .recording)
+        XCTAssertEqual(store.status.message, "Listening…")
+        XCTAssertEqual(store.status.revision, 2)
+        XCTAssertEqual(store.status.updatedAt, refreshedAt)
+    }
+
+    func testProgressRefreshCannotReviveAReplacedOrFinishedStatus() {
+        let completedAt = Date(timeIntervalSince1970: 2_000)
+        store.publish(
+            transcript: "Done",
+            for: "request-2",
+            processID: "process-1",
+            at: completedAt
+        )
+
+        store.refreshInFlightStatus(
+            for: "request-1",
+            processID: "process-1",
+            phase: .recording,
+            at: completedAt.addingTimeInterval(5)
+        )
+
+        XCTAssertEqual(store.status.phase, .completed)
+        XCTAssertEqual(store.status.transcript, "Done")
+        XCTAssertEqual(store.status.updatedAt, completedAt)
+    }
+
     func testPendingRecordingKeepsItsPersistedDeliveryRequest() {
         var status = DictationStatus.idle
         status.requestID = "newer-shared-status"

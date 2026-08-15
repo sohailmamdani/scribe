@@ -144,6 +144,7 @@ final class DictationCoordinator: NSObject, ObservableObject {
 	private var modelPreparationTaskID: UIBackgroundTaskIdentifier = .invalid
 	private var memoryWarningObserver: NSObjectProtocol?
 	private var lastHeartbeat = Date.distantPast
+	private var lastRecordingStatusRefresh = Date.distantPast
 	private let processID = UUID().uuidString
 	private var currentRequestID: String?
 	private var requestGate = DictationRequestGate()
@@ -616,8 +617,9 @@ final class DictationCoordinator: NSObject, ObservableObject {
 				startSessionLoop()
 			}
 			extendSession()
-            state = .recording
+			state = .recording
 			publishStatus(.recording, "Listening…")
+			lastRecordingStatusRefresh = Date()
 
             meterTask?.cancel()
             meterTask = Task { [weak self] in
@@ -835,7 +837,7 @@ final class DictationCoordinator: NSObject, ObservableObject {
         state = whisperKit == nil ? .preparing : .ready
     }
 
-    private func updateMeter() {
+	private func updateMeter() {
 		if let error = captureSink.takeWriteError() {
 			logger.error("Audio capture failed: \(error.localizedDescription, privacy: .public)")
 			handleUnexpectedCaptureFailure()
@@ -845,6 +847,14 @@ final class DictationCoordinator: NSObject, ObservableObject {
 		let normalized = captureSink.audioLevel
         audioLevel = normalized
         sharedStore.audioLevel = normalized
+		if Date().timeIntervalSince(lastRecordingStatusRefresh) > 2 {
+			lastRecordingStatusRefresh = Date()
+			sharedStore.refreshInFlightStatus(
+				for: currentRequestID,
+				processID: processID,
+				phase: .recording
+			)
+		}
 		if Date().timeIntervalSince(lastHeartbeat) > 2 {
 			lastHeartbeat = Date()
 			sharedStore.refreshSessionHeartbeat(processID: processID)

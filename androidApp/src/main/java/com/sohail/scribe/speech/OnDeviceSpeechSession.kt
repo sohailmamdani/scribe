@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.ModelDownloadListener
 import android.speech.RecognitionListener
 import android.speech.RecognitionSupport
@@ -43,10 +45,31 @@ internal object OnDeviceFormattingPolicy {
     }
 }
 
+internal class RecognitionTranscriptAccumulator {
+    private val segments = mutableListOf<String>()
+
+    fun reset() = segments.clear()
+
+    fun append(text: String): String {
+        text.trim().takeIf(String::isNotEmpty)?.let(segments::add)
+        return text()
+    }
+
+    fun preview(partial: String): String =
+        (segments + partial.trim().takeIf(String::isNotEmpty).orEmpty())
+            .filter(String::isNotEmpty)
+            .joinToString(" ")
+
+    fun text(): String = segments.joinToString(" ")
+}
+
+internal const val MANUAL_DICTATION_WINDOW_MILLIS = 30 * 60 * 1_000
+
 internal fun onDeviceRecognizerIntent(
     languageTag: String,
     sdkInt: Int = Build.VERSION.SDK_INT,
     enableFormatting: Boolean = true,
+    manualEndpointing: Boolean = true,
 ) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
     putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
@@ -55,6 +78,31 @@ internal fun onDeviceRecognizerIntent(
     // Android still returns the documented formatted/raw hypothesis pair.
     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+    if (manualEndpointing) {
+        // Android recognizers normally endpoint after a short pause. Dictation
+        // is a user-controlled session, so ask the implementation to keep the
+        // microphone open until Stop. Segmented mode is the documented way to
+        // pair a long minimum with interim results on API 33+; the session also
+        // rolls over below when an implementation ignores these advisory extras.
+        putExtra(
+            RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS,
+            MANUAL_DICTATION_WINDOW_MILLIS,
+        )
+        putExtra(
+            RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+            MANUAL_DICTATION_WINDOW_MILLIS,
+        )
+        putExtra(
+            RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+            MANUAL_DICTATION_WINDOW_MILLIS,
+        )
+        if (sdkInt >= 33) {
+            putExtra(
+                RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS,
+            )
+        }
+    }
     if (enableFormatting && sdkInt >= 33) {
         putExtra(
             RecognizerIntent.EXTRA_ENABLE_FORMATTING,
@@ -93,9 +141,15 @@ class OnDeviceSpeechSession(
     private val modelStatusListener: (OnDeviceModelStatus) -> Unit = {},
 ) : RecognitionListener {
     private val appContext = context.applicationContext
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val callbackGate = SpeechCallbackGate()
+    private val transcriptAccumulator = RecognitionTranscriptAccumulator()
     private var recognizer: SpeechRecognizer? = null
     private var receivedFinalResult = false
+    private var sessionActive = false
+    private var stopRequested = false
+    private var restartPending = false
+    private var activeLanguageTag = Locale.getDefault().toLanguageTag()
 
     val isAvailable: Boolean
         get() = SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)
@@ -110,8 +164,18 @@ class OnDeviceSpeechSession(
             return
         }
         destroyRecognizer()
+        transcriptAccumulator.reset()
+        activeLanguageTag = languageTag
+        sessionActive = true
+        stopRequested = false
+        restartPending = false
         receivedFinalResult = false
         listener.onStateChanged(SpeechSessionState.PREPARING, "Starting private on-device recognition…")
+        startRecognizer()
+    }
+
+    private fun startRecognizer() {
+        if (!sessionActive || stopRequested) return
         val token = callbackGate.begin()
         try {
             val activeRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
@@ -119,11 +183,12 @@ class OnDeviceSpeechSession(
             activeRecognizer.setRecognitionListener(gatedRecognitionListener(token))
             activeRecognizer.startListening(
                 onDeviceRecognizerIntent(
-                    languageTag,
+                    activeLanguageTag,
                     enableFormatting = formattingEnabled(),
                 ),
             )
         } catch (error: RuntimeException) {
+            sessionActive = false
             destroyRecognizer(token)
             listener.onStateChanged(SpeechSessionState.FAILED, startFailureMessage(error))
         }
@@ -131,7 +196,13 @@ class OnDeviceSpeechSession(
 
     fun stop() {
         checkMainThread()
-        val activeRecognizer = recognizer ?: return
+        stopRequested = true
+        restartPending = false
+        val activeRecognizer = recognizer
+        if (activeRecognizer == null) {
+            finishRecognition()
+            return
+        }
         try {
             listener.onStateChanged(SpeechSessionState.PROCESSING, "Finishing your words…")
             activeRecognizer.stopListening()
@@ -146,6 +217,10 @@ class OnDeviceSpeechSession(
 
     fun cancel() {
         checkMainThread()
+        sessionActive = false
+        stopRequested = false
+        restartPending = false
+        transcriptAccumulator.reset()
         try {
             recognizer?.cancel()
         } catch (_: RuntimeException) {
@@ -158,13 +233,19 @@ class OnDeviceSpeechSession(
     fun requestModelDownload(languageTag: String = Locale.getDefault().toLanguageTag()): Boolean {
         checkMainThread()
         if (Build.VERSION.SDK_INT < 33 || !isAvailable) return false
+        sessionActive = false
+        restartPending = false
         destroyRecognizer()
         val token = callbackGate.begin()
         try {
             val downloadRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
             recognizer = downloadRecognizer
             downloadRecognizer.setRecognitionListener(gatedRecognitionListener(token))
-            val intent = onDeviceRecognizerIntent(languageTag, enableFormatting = false)
+            val intent = onDeviceRecognizerIntent(
+                languageTag,
+                enableFormatting = false,
+                manualEndpointing = false,
+            )
             if (Build.VERSION.SDK_INT >= 34) {
                 modelStatusListener(OnDeviceModelStatus.DOWNLOADING)
                 listener.onStateChanged(SpeechSessionState.PREPARING, "Requesting the on-device language model…")
@@ -235,6 +316,8 @@ class OnDeviceSpeechSession(
             modelStatusListener(OnDeviceModelStatus.UNKNOWN)
             return
         }
+        sessionActive = false
+        restartPending = false
         destroyRecognizer()
         modelStatusListener(OnDeviceModelStatus.CHECKING)
         val token = callbackGate.begin()
@@ -243,7 +326,11 @@ class OnDeviceSpeechSession(
             recognizer = supportRecognizer
             supportRecognizer.setRecognitionListener(gatedRecognitionListener(token))
             supportRecognizer.checkRecognitionSupport(
-                onDeviceRecognizerIntent(languageTag, enableFormatting = false),
+                onDeviceRecognizerIntent(
+                    languageTag,
+                    enableFormatting = false,
+                    manualEndpointing = false,
+                ),
                 appContext.mainExecutor,
                 object : RecognitionSupportCallback {
                     override fun onSupportResult(recognitionSupport: RecognitionSupport) {
@@ -272,6 +359,8 @@ class OnDeviceSpeechSession(
 
     fun destroy() {
         checkMainThread()
+        sessionActive = false
+        restartPending = false
         destroyRecognizer()
     }
 
@@ -290,29 +379,63 @@ class OnDeviceSpeechSession(
     override fun onBufferReceived(buffer: ByteArray?) = Unit
 
     override fun onEndOfSpeech() {
-        listener.onStateChanged(SpeechSessionState.PROCESSING, "Finishing your words…")
+        listener.onStateChanged(
+            if (stopRequested) SpeechSessionState.PROCESSING else SpeechSessionState.LISTENING,
+            if (stopRequested) "Finishing your words…" else "Listening on device",
+        )
     }
 
     override fun onError(error: Int) {
         if (receivedFinalResult && error == SpeechRecognizer.ERROR_CLIENT) return
+        if (!stopRequested && error in setOf(
+                SpeechRecognizer.ERROR_NO_MATCH,
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+            )
+        ) {
+            continueAfterEndpoint()
+            return
+        }
+        if (stopRequested && error in setOf(
+                SpeechRecognizer.ERROR_CLIENT,
+                SpeechRecognizer.ERROR_NO_MATCH,
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+            ) &&
+            transcriptAccumulator.text().isNotBlank()
+        ) {
+            finishRecognition()
+            return
+        }
+        sessionActive = false
         listener.onStateChanged(SpeechSessionState.FAILED, errorMessage(error))
         destroyRecognizer()
     }
 
     override fun onResults(results: Bundle?) {
         val text = bestResult(results)
-        if (text.isBlank()) {
-            listener.onStateChanged(SpeechSessionState.FAILED, "No speech was recognized. Try again.")
+        if (!stopRequested) {
+            transcriptAccumulator.append(text)
+            transcriptAccumulator.text().takeIf(String::isNotBlank)?.let(listener::onPartialResult)
+            continueAfterEndpoint()
         } else {
-            receivedFinalResult = true
-            listener.onStateChanged(SpeechSessionState.COMPLETED, "Transcription complete")
-            listener.onFinalResult(text)
+            transcriptAccumulator.append(text)
+            finishRecognition()
         }
-        destroyRecognizer()
     }
 
     override fun onPartialResults(partialResults: Bundle?) {
-        bestResult(partialResults).takeIf(String::isNotBlank)?.let(listener::onPartialResult)
+        transcriptAccumulator.preview(bestResult(partialResults))
+            .takeIf(String::isNotBlank)
+            ?.let(listener::onPartialResult)
+    }
+
+    override fun onSegmentResults(segmentResults: Bundle) {
+        transcriptAccumulator.append(bestResult(segmentResults))
+            .takeIf(String::isNotBlank)
+            ?.let(listener::onPartialResult)
+    }
+
+    override fun onEndOfSegmentedSession() {
+        if (stopRequested) finishRecognition() else continueAfterEndpoint()
     }
 
     override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -355,6 +478,14 @@ class OnDeviceSpeechSession(
             this@OnDeviceSpeechSession.onPartialResults(partialResults)
         }
 
+        override fun onSegmentResults(segmentResults: Bundle) = forward(token) {
+            this@OnDeviceSpeechSession.onSegmentResults(segmentResults)
+        }
+
+        override fun onEndOfSegmentedSession() = forward(token) {
+            this@OnDeviceSpeechSession.onEndOfSegmentedSession()
+        }
+
         override fun onEvent(eventType: Int, params: Bundle?) = forward(token) {
             this@OnDeviceSpeechSession.onEvent(eventType, params)
         }
@@ -362,6 +493,32 @@ class OnDeviceSpeechSession(
 
     private inline fun forward(token: Long, callback: () -> Unit) {
         if (callbackGate.accepts(token)) callback()
+    }
+
+    private fun continueAfterEndpoint() {
+        if (!sessionActive || stopRequested || restartPending) return
+        destroyRecognizer()
+        restartPending = true
+        listener.onStateChanged(SpeechSessionState.LISTENING, "Listening on device")
+        mainHandler.post {
+            if (!restartPending || !sessionActive || stopRequested) return@post
+            restartPending = false
+            startRecognizer()
+        }
+    }
+
+    private fun finishRecognition() {
+        val text = transcriptAccumulator.text()
+        sessionActive = false
+        restartPending = false
+        if (text.isBlank()) {
+            listener.onStateChanged(SpeechSessionState.FAILED, "No speech was recognized. Try again.")
+        } else {
+            receivedFinalResult = true
+            listener.onStateChanged(SpeechSessionState.COMPLETED, "Transcription complete")
+            listener.onFinalResult(text)
+        }
+        destroyRecognizer()
     }
 
     private fun destroyRecognizer(expectedToken: Long? = null) {

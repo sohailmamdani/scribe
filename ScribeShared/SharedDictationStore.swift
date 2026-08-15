@@ -318,6 +318,29 @@ struct SharedDictationStore: @unchecked Sendable {
         write(next, forKey: Key.status)
     }
 
+    /// Marks genuine app-side progress without replacing the current status.
+    ///
+    /// Recording is intentionally open-ended and otherwise publishes its
+    /// "Listening…" status only once. Refreshing that snapshot while the audio
+    /// sink is still healthy lets the keyboard distinguish a long dictation
+    /// from a host process that actually stalled.
+    func refreshInFlightStatus(
+        for requestID: String?,
+        processID: String,
+        phase: DictationPhase,
+        at date: Date = Date()
+    ) {
+        guard defaults != nil else { return }
+        var current = status
+        guard current.requestID == requestID,
+              current.processID == processID,
+              current.phase == phase,
+              current.isInFlight else { return }
+        current.revision += 1
+        current.updatedAt = date
+        write(current, forKey: Key.status)
+    }
+
     func publish(
         transcript: String,
         for requestID: String?,
