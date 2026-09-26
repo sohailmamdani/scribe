@@ -89,7 +89,14 @@ struct KeyboardIntegrationProbe {
         spaceView.touchesBegan([space], with: nil)
         spaceView.touchesEnded([space], with: nil)
         precondition(text == "cat  ", "Cancelled touch committed")
-        print("PASS UIKit overlapping touches and cancellation")
+        var endpoint = CGPoint.zero
+        letterView.onEnded = { endpoint = $0 }
+        let fastDrag = ProbeTouch(time: 3)
+        letterView.touchesBegan([fastDrag], with: nil)
+        fastDrag.point = CGPoint(x: 180, y: 60)
+        letterView.touchesEnded([fastDrag], with: nil)
+        precondition(endpoint == fastDrag.point, "Lift endpoint was discarded")
+        print("PASS UIKit overlapping touches, cancellation, and lift endpoint")
 
         let queue = KeyboardInputQueue()
         text = "teh"
@@ -110,8 +117,9 @@ struct KeyboardIntegrationProbe {
 }
 
 private final class ProbeTouch: UITouch {
+    var point = CGPoint(x: 20, y: 20)
     private let time: TimeInterval
     init(time: TimeInterval) { self.time = time; super.init() }
     override var timestamp: TimeInterval { time }
-    override func location(in view: UIView?) -> CGPoint { CGPoint(x: 20, y: 20) }
+    override func location(in view: UIView?) -> CGPoint { point }
 }

@@ -941,9 +941,9 @@ struct KeyboardRootView: View {
                 deltaY: Double(deltaY),
                 keyWidth: Double(characterKeyWidth),
                 keyHeight: Double(keyHeight),
-                enteredDifferentLetter: enteredDifferentLetter,
+                enteredDifferentLetter: enteredDifferentLetter && documentState.preferences.slideToTypeEnabled,
                 alternateGestureArmed: false,
-                elapsed: documentState.preferences.slideToTypeEnabled ? elapsed : 0
+                elapsed: elapsed
             )
             switch resolution {
             case .alternatePreview:
@@ -1006,6 +1006,9 @@ struct KeyboardRootView: View {
     }
 
     private func touchEnded(at point: CGPoint) {
+        // UIKit may coalesce the last movement into the lift event. Classify
+        // that endpoint too, including fast swipes and popup selections.
+        touchMoved(to: point)
         deleteRepeater.stop()
         alternateHoldTask?.cancel()
         alternateHoldTask = nil
