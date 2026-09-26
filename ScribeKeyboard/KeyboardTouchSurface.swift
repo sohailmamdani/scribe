@@ -12,6 +12,7 @@ import UIKit
 /// one lifts, commit the previous touch at its last location and immediately
 /// begin the new one instead of dropping the second key.
 struct KeyboardTouchSurface: UIViewRepresentable {
+    let sequence: KeyboardTouchSequence
     let onBegan: (CGPoint) -> Void
     let onMoved: (CGPoint) -> Void
     let onEnded: (CGPoint) -> Void
@@ -34,6 +35,7 @@ struct KeyboardTouchSurface: UIViewRepresentable {
     }
 
     private func update(_ view: TouchView) {
+        view.sequence = sequence
         view.onBegan = onBegan
         view.onMoved = onMoved
         view.onEnded = onEnded
@@ -41,6 +43,8 @@ struct KeyboardTouchSurface: UIViewRepresentable {
     }
 
     final class TouchView: UIView {
+        var sequence: KeyboardTouchSequence?
+        private let sequenceID = UUID()
         var onBegan: ((CGPoint) -> Void)?
         var onMoved: ((CGPoint) -> Void)?
         var onEnded: ((CGPoint) -> Void)?
@@ -52,8 +56,8 @@ struct KeyboardTouchSurface: UIViewRepresentable {
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesBegan(touches, with: event)
             for touch in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
-                if activeTouch != nil, let lastLocation {
-                    onEnded?(lastLocation)
+                sequence?.begin(id: sequenceID) { [weak self] in
+                    self?.finishActiveTouch()
                 }
                 activeTouch = touch
                 let location = touch.location(in: self)
@@ -74,9 +78,16 @@ struct KeyboardTouchSurface: UIViewRepresentable {
             super.touchesEnded(touches, with: event)
             guard let touch = touches.first(where: { $0 === activeTouch }) else { return }
             let location = touch.location(in: self)
-            onEnded?(location)
+            lastLocation = location
+            finishActiveTouch()
+        }
+
+        private func finishActiveTouch() {
+            guard activeTouch != nil, let lastLocation else { return }
             activeTouch = nil
-            lastLocation = nil
+            self.lastLocation = nil
+            sequence?.end(id: sequenceID)
+            onEnded?(lastLocation)
         }
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -93,6 +104,7 @@ struct KeyboardTouchSurface: UIViewRepresentable {
         }
 
         private func cancelActiveTouch() {
+            sequence?.end(id: sequenceID)
             activeTouch = nil
             lastLocation = nil
             onCancelled?()

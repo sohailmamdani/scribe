@@ -174,6 +174,38 @@ final class KeyboardHitGridTests: XCTestCase {
         XCTAssertEqual(key(at: point), "shift")
     }
 
+    func testBottomRowAndItsSurroundingGapsArePartOfTheSameGrid() {
+        var frames = letterLayoutFrames()
+        let widths = KeyboardBottomRowWidths.resolve(
+            totalWidth: totalWidth, outerInset: geometry.outerInset,
+            horizontalGap: geometry.horizontalGap, punctuationWidth: 46,
+            includesInputModeSwitchKey: false
+        )
+        let bottomY = 3 * (geometry.keyHeight + geometry.verticalGap)
+        var x = geometry.outerInset
+        for (name, width) in [("mode", widths.mode), ("space", widths.space),
+                              ("period", 46.0), ("return", widths.returnKey)] {
+            frames[name] = CGRect(x: x, y: bottomY, width: width, height: geometry.keyHeight)
+            x += width + geometry.horizontalGap
+        }
+        let fullBounds = CGRect(x: 0, y: 0, width: totalWidth, height: bottomY + geometry.keyHeight)
+        let regions = KeyboardHitGrid.regions(forFrames: frames, in: fullBounds)
+        let space = frames["space"]!
+        XCTAssertEqual(KeyboardHitGrid.key(
+            at: CGPoint(x: space.midX, y: space.minY - 2), regions: regions, verticalTapBias: 0
+        ), "space")
+        XCTAssertEqual(KeyboardHitGrid.key(
+            at: CGPoint(x: space.maxX + 2, y: space.midY), regions: regions, verticalTapBias: 0
+        ), "space")
+        for y in stride(from: bounds.maxY, through: fullBounds.maxY, by: 2) {
+            for x in stride(from: 0.0, through: totalWidth, by: 2) {
+                XCTAssertNotNil(KeyboardHitGrid.key(
+                    at: CGPoint(x: x, y: y), regions: regions, verticalTapBias: 0
+                ))
+            }
+        }
+    }
+
     // MARK: - Edges and margins
 
     /// Outer keys claim the margin beside them, as they do on iOS. A tap on the

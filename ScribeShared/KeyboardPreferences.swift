@@ -53,6 +53,7 @@ struct KeyboardPreferences: Equatable, Sendable {
     var keyPreviewsEnabled: Bool
     var hapticsEnabled: Bool
     var doubleSpacePeriodEnabled: Bool
+    var slideToTypeEnabled: Bool
 
     init(
         alternateSymbolsEnabled: Bool,
@@ -61,7 +62,8 @@ struct KeyboardPreferences: Equatable, Sendable {
         symbolPageTapScope: KeyboardSymbolPageTapScope,
         keyPreviewsEnabled: Bool,
         hapticsEnabled: Bool,
-        doubleSpacePeriodEnabled: Bool
+        doubleSpacePeriodEnabled: Bool,
+        slideToTypeEnabled: Bool = true
     ) {
         self.alternateSymbolsEnabled = alternateSymbolsEnabled
         self.alternateHoldDelayMilliseconds = min(
@@ -73,6 +75,7 @@ struct KeyboardPreferences: Equatable, Sendable {
         self.keyPreviewsEnabled = keyPreviewsEnabled
         self.hapticsEnabled = hapticsEnabled
         self.doubleSpacePeriodEnabled = doubleSpacePeriodEnabled
+        self.slideToTypeEnabled = slideToTypeEnabled
     }
 }
 
@@ -91,7 +94,10 @@ struct SharedKeyboardPreferencesStore: @unchecked Sendable {
         static let hapticsEnabled = "keyboard.preferences.hapticsEnabled"
         static let doubleSpacePeriodEnabled = "keyboard.preferences.doubleSpacePeriodEnabled"
 
+        static let slideToTypeEnabled = "keyboard.preferences.slideToTypeEnabled"
+
         static let all = [
+            slideToTypeEnabled,
             alternateSymbolsEnabled,
             alternateHoldDelayMilliseconds,
             symbolPageTapBehavior,
@@ -141,6 +147,10 @@ struct SharedKeyboardPreferencesStore: @unchecked Sendable {
                 doubleSpacePeriodEnabled: bool(
                     forKey: Key.doubleSpacePeriodEnabled,
                     fallback: fallback.doubleSpacePeriodEnabled
+                ),
+                slideToTypeEnabled: bool(
+                    forKey: Key.slideToTypeEnabled,
+                    fallback: fallback.slideToTypeEnabled
                 )
             )
         }
@@ -152,7 +162,8 @@ struct SharedKeyboardPreferencesStore: @unchecked Sendable {
                 symbolPageTapScope: newValue.symbolPageTapScope,
                 keyPreviewsEnabled: newValue.keyPreviewsEnabled,
                 hapticsEnabled: newValue.hapticsEnabled,
-                doubleSpacePeriodEnabled: newValue.doubleSpacePeriodEnabled
+                doubleSpacePeriodEnabled: newValue.doubleSpacePeriodEnabled,
+                slideToTypeEnabled: newValue.slideToTypeEnabled
             )
             defaults?.set(normalized.alternateSymbolsEnabled, forKey: Key.alternateSymbolsEnabled)
             defaults?.set(
@@ -164,6 +175,7 @@ struct SharedKeyboardPreferencesStore: @unchecked Sendable {
             defaults?.set(normalized.keyPreviewsEnabled, forKey: Key.keyPreviewsEnabled)
             defaults?.set(normalized.hapticsEnabled, forKey: Key.hapticsEnabled)
             defaults?.set(normalized.doubleSpacePeriodEnabled, forKey: Key.doubleSpacePeriodEnabled)
+            defaults?.set(normalized.slideToTypeEnabled, forKey: Key.slideToTypeEnabled)
         }
     }
 

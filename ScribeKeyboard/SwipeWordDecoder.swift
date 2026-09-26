@@ -6,7 +6,7 @@ import Foundation
 /// the keyboard. Candidates are scored by comparing the swipe's path shape
 /// against each word's ideal key-to-key path (SHARK2-style), weighted by
 /// word frequency.
-final class SwipeWordDecoder {
+nonisolated final class SwipeWordDecoder: Sendable {
     static let shared = SwipeWordDecoder(words: SwipeWordDecoder.loadBundledWords())
 
     private struct Entry {

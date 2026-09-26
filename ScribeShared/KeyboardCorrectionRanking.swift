@@ -7,7 +7,7 @@ import Foundation
 /// exact touch point, so a mistyped "d" that landed hard against the "s" edge
 /// is separable from one struck dead centre — the former should correct freely,
 /// the latter should not.
-struct KeyboardTapEvidence: Equatable, Sendable {
+nonisolated struct KeyboardTapEvidence: Equatable, Sendable {
     /// The character that was committed.
     let character: Character
     /// Distance from the touch point to nearby key centres, in key widths.
@@ -22,7 +22,7 @@ struct KeyboardTapEvidence: Equatable, Sendable {
 
 /// One entry from `UILexicon` — the user's contacts and text shortcuts.
 /// `userInput` is what they type, `documentText` what it expands to.
-struct KeyboardUserLexiconEntry: Equatable, Hashable, Sendable {
+nonisolated struct KeyboardUserLexiconEntry: Equatable, Hashable, Sendable {
     let userInput: String
     let documentText: String
 
@@ -32,7 +32,7 @@ struct KeyboardUserLexiconEntry: Equatable, Hashable, Sendable {
     }
 }
 
-struct KeyboardCorrectionCandidate: Equatable, Sendable {
+nonisolated struct KeyboardCorrectionCandidate: Equatable, Sendable {
     let word: String
     let distance: Int
     let frequency: Int64
@@ -67,7 +67,7 @@ struct KeyboardCorrectionCandidate: Equatable, Sendable {
     }
 }
 
-enum KeyboardCorrectionDecision: Equatable, Sendable {
+nonisolated enum KeyboardCorrectionDecision: Equatable, Sendable {
     /// Offer nothing.
     case none
     /// Show in the suggestion bar; commit only if the user taps it.
@@ -76,7 +76,7 @@ enum KeyboardCorrectionDecision: Equatable, Sendable {
     case autoReplace
 }
 
-enum KeyboardCorrectionRanking {
+nonisolated enum KeyboardCorrectionRanking {
     /// Applied when there is no touch evidence for a position — dictation,
     /// swipe, and paste produce text without taps. Deliberately mid-range: it
     /// neither vouches for nor condemns the candidate, leaving the frequency
@@ -166,20 +166,39 @@ enum KeyboardCorrectionRanking {
         original: String,
         originalIsKnownWord: Bool,
         isProtected: Bool,
-        ranked: [KeyboardCorrectionCandidate]
+        ranked: [KeyboardCorrectionCandidate],
+        originalFrequency: Int64 = 0,
+        originalBigramFrequency: Int64 = 0,
+        hasTapEvidence: Bool = false
     ) -> KeyboardCorrectionDecision {
         guard !isProtected, let best = ranked.first else { return .none }
-        // Never overwrite a word that is genuinely spelled correctly. This is
-        // the behaviour people describe as the keyboard "fighting" them.
-        guard !originalIsKnownWord else { return .suggest }
-        guard KeyboardEditingRules.isWordSafeCorrectionCandidate(best.word),
-              original.count >= 3 else {
-            return .suggest
-        }
-        // The candidate has to be a word something recognizes.
+        guard KeyboardEditingRules.isWordSafeCorrectionCandidate(best.word) else { return .suggest }
         guard best.frequency > 1 || best.systemRank != nil else { return .suggest }
-
         let margin = ranked.count > 1 ? score(ranked[1]) - score(best) : .infinity
+
+        if originalIsKnownWord {
+            // Real-word slips need agreement from touch location, a decisive
+            // context, and a much stronger word prior. A rare dictionary entry
+            // alone is not a blanket veto, but correctly aimed words stay put.
+            guard hasTapEvidence, original.count >= 3, best.distance == 1,
+                  best.spatialCost <= 0.9,
+                  Double(best.frequency) >= Double(max(1, originalFrequency)) * 8,
+                  best.bigramFrequency >= 50_000_000,
+                  Double(best.bigramFrequency) >= Double(best.frequency) * 0.02,
+                  Double(best.bigramFrequency) >= Double(max(1, originalBigramFrequency)) * 25,
+                  margin >= autoReplaceMargin else { return .suggest }
+            return .autoReplace
+        }
+
+        if original.count == 2 {
+            // Repair a dropped letter in context ("in te" -> "in the"), not
+            // arbitrary two-letter substitutions such as "im" -> "in".
+            guard best.distance == 1, best.word.count == 3,
+                  best.frequency >= 100_000_000, best.bigramFrequency >= 1_000_000,
+                  best.systemRank != nil, margin >= 25 else { return .suggest }
+            return .autoReplace
+        }
+        guard original.count >= 3 else { return .suggest }
 
         switch best.distance {
         case 1:

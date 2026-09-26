@@ -1,6 +1,6 @@
 import Foundation
 
-enum KeyboardFieldKind: Equatable, Sendable {
+nonisolated enum KeyboardFieldKind: Equatable, Sendable {
     case text
     case URL
     case email
@@ -18,14 +18,14 @@ enum KeyboardFieldKind: Equatable, Sendable {
     }
 }
 
-enum KeyboardCapitalizationMode: Equatable, Sendable {
+nonisolated enum KeyboardCapitalizationMode: Equatable, Sendable {
     case none
     case words
     case sentences
     case allCharacters
 }
 
-enum KeyboardShiftState: Equatable, Sendable {
+nonisolated enum KeyboardShiftState: Equatable, Sendable {
     case off
     case once
     case locked
@@ -33,7 +33,7 @@ enum KeyboardShiftState: Equatable, Sendable {
     var usesUppercase: Bool { self != .off }
 }
 
-enum KeyboardEditingRules {
+nonisolated enum KeyboardEditingRules {
     nonisolated static let rejectedAutocorrectionWordsKey =
         "keyboard.autocorrect.rejectedWords.v2"
 

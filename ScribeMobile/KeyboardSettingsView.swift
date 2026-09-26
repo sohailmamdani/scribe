@@ -60,6 +60,7 @@ struct KeyboardSettingsView: View {
             }
 
             Section("Typing") {
+                Toggle("Slide to Type", isOn: binding(\.slideToTypeEnabled))
                 Toggle("Key pop-up previews", isOn: binding(\.keyPreviewsEnabled))
                 Toggle("Double-space period", isOn: binding(\.doubleSpacePeriodEnabled))
             }

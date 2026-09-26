@@ -1,6 +1,6 @@
 import UIKit
 
-struct KeyboardCorrection: Equatable, Hashable, Sendable {
+nonisolated struct KeyboardCorrection: Equatable, Hashable, Sendable {
     let text: String
     let automaticallyReplaces: Bool
     /// A completion extends a partially typed word rather than repairing it.
@@ -59,7 +59,6 @@ actor KeyboardAutocorrectionEngine {
         )
     }
 
-    private let checker = UITextChecker()
     private var lexicon: Lexicon?
     private var loadTask: Task<Lexicon, Never>?
 
@@ -130,6 +129,7 @@ actor KeyboardAutocorrectionEngine {
 
     func prepare() async {
         _ = await loadedLexicon()
+        _ = await KeyboardSystemSpelling.shared.result(for: "keyboarf", language: "en-US")
     }
 
     func updateSupplementaryLexicon(entries: [KeyboardUserLexiconEntry]) {
@@ -155,11 +155,13 @@ actor KeyboardAutocorrectionEngine {
         for word: String,
         contextBefore: String?,
         language: String,
-        evidence: [KeyboardTapEvidence]
+        evidence: [KeyboardTapEvidence],
+        includeCompletions: Bool = true
     ) async -> [KeyboardCorrection] {
         let original = word.lowercased()
         guard original.count >= 2, language.lowercased().hasPrefix("en") else { return [] }
         let lexicon = await loadedLexicon()
+        guard !Task.isCancelled else { return [] }
 
         let isProtected = protectedWordLookup.contains(original)
             || userLexiconWords.contains(original)
@@ -169,7 +171,8 @@ actor KeyboardAutocorrectionEngine {
         let previousWord = KeyboardEditingRules.wordBeforeAutocorrectionWord(
             contextBefore: contextBefore
         )?.lowercased()
-        let spelling = spellingResult(for: word, language: language)
+        let spelling = await KeyboardSystemSpelling.shared.result(for: word, language: language)
+        guard !Task.isCancelled else { return [] }
         let systemRanks = Dictionary(
             spelling.suggestions.enumerated().map { ($0.element.lowercased(), $0.offset) },
             uniquingKeysWith: min
@@ -185,7 +188,8 @@ actor KeyboardAutocorrectionEngine {
 
         let maximumDistance = Self.maximumDistance(forLength: original.count)
         let candidates = candidateWords.compactMap { candidate -> KeyboardCorrectionCandidate? in
-            guard KeyboardEditingRules.isWordSafeCorrectionCandidate(candidate) else { return nil }
+            guard !Task.isCancelled,
+                  KeyboardEditingRules.isWordSafeCorrectionCandidate(candidate) else { return nil }
             let distance = KeyboardEditingRules.correctionDistance(original, candidate)
             guard distance <= maximumDistance else { return nil }
 
@@ -214,13 +218,21 @@ actor KeyboardAutocorrectionEngine {
         let ranked = KeyboardCorrectionRanking.rank(candidates)
         let decision = KeyboardCorrectionRanking.decision(
             original: original,
-            originalIsKnownWord: !spelling.isMisspelled || lexicon.frequencies[original] != nil,
+            originalIsKnownWord: !spelling.isMisspelled,
             isProtected: isProtected,
-            ranked: ranked
+            ranked: ranked,
+            originalFrequency: lexicon.frequencies[original] ?? 0,
+            originalBigramFrequency: previousWord.map {
+                Self.bigramFrequency(first: $0, second: original, in: lexicon)
+            } ?? 0,
+            hasTapEvidence: evidence.count == original.count && !evidence.isEmpty
         )
 
         var suggestions: [KeyboardCorrection] = []
-        if decision != .none {
+        // A correctly spelled word should not fill the bar with unrelated
+        // replacements ("hello" -> "hell", "help"). Prefer completions unless
+        // touch and context actually justify a real-word repair.
+        if decision != .none, spelling.isMisspelled || decision == .autoReplace {
             suggestions = ranked.prefix(Self.maximumSuggestions).enumerated().map { index, candidate in
                 KeyboardCorrection(
                     text: candidate.word,
@@ -250,9 +262,9 @@ actor KeyboardAutocorrectionEngine {
         // Fill any remaining room with completions of what has been typed so
         // far. These extend the word rather than repairing it, so they are
         // offered for an explicit tap and never applied on a delimiter.
-        if suggestions.count < Self.maximumSuggestions {
+        if includeCompletions, !Task.isCancelled, suggestions.count < Self.maximumSuggestions {
             let taken = Set(suggestions.map(\.text) + [original])
-            for completion in completions(for: word, language: language, in: lexicon)
+            for completion in await completions(for: word, language: language, in: lexicon)
             where !taken.contains(completion) {
                 suggestions.append(
                     KeyboardCorrection(
@@ -264,7 +276,7 @@ actor KeyboardAutocorrectionEngine {
                 if suggestions.count == Self.maximumSuggestions { break }
             }
         }
-        return suggestions
+        return Task.isCancelled ? [] : suggestions
     }
 
     /// `UITextChecker.completions(forPartialWordRange:)` — the one part of
@@ -274,14 +286,9 @@ actor KeyboardAutocorrectionEngine {
         for word: String,
         language: String,
         in lexicon: Lexicon
-    ) -> [String] {
+    ) async -> [String] {
         guard word.count >= Self.minimumLengthForCompletions else { return [] }
-        let range = NSRange(location: 0, length: (word as NSString).length)
-        let raw = checker.completions(
-            forPartialWordRange: range,
-            in: word,
-            language: language
-        ) ?? []
+        let raw = await KeyboardSystemSpelling.shared.completions(for: word, language: language)
         let lowercasedOriginal = word.lowercased()
         return raw
             .map { $0.lowercased() }
@@ -326,21 +333,6 @@ actor KeyboardAutocorrectionEngine {
         )
     }
 
-    private func spellingResult(
-        for word: String,
-        language: String
-    ) -> (isMisspelled: Bool, suggestions: [String]) {
-        let range = NSRange(location: 0, length: (word as NSString).length)
-        let misspelledRange = checker.rangeOfMisspelledWord(
-            in: word, range: range, startingAt: 0, wrap: false, language: language
-        )
-        guard misspelledRange.location != NSNotFound,
-              misspelledRange.length == range.length else {
-            return (false, [])
-        }
-        return (true, checker.guesses(forWordRange: range, in: word, language: language) ?? [])
-    }
-
     private func userLexiconMatches(for original: String) -> Set<String> {
         let maximumDistance = Self.maximumDistance(forLength: original.count)
         return Set(
@@ -373,6 +365,7 @@ actor KeyboardAutocorrectionEngine {
                     BucketKey(length: length, firstLetter: first)
                 ] ?? []
                 for entry in entries {
+                    if Task.isCancelled { return [] }
                     // A letter present in one word and absent from the other
                     // costs at least one edit, so this is a sound lower bound.
                     let missingFromCandidate = (originalMask & ~entry.mask).nonzeroBitCount
@@ -593,5 +586,32 @@ actor KeyboardAutocorrectionEngine {
             guard fields.count == 2, let frequency = Int64(fields[1]) else { return nil }
             return (String(fields[0]), frequency)
         }
+    }
+}
+
+/// UIKit owns the spell checker on the main actor. Only these small system
+/// calls run there; corpus search and ranking stay on the correction actor.
+@MainActor
+private final class KeyboardSystemSpelling {
+    static let shared = KeyboardSystemSpelling()
+    private let checker = UITextChecker()
+
+    func result(for word: String, language: String) -> (isMisspelled: Bool, suggestions: [String]) {
+        guard !Task.isCancelled else { return (true, []) }
+        let range = NSRange(location: 0, length: (word as NSString).length)
+        let misspelledRange = checker.rangeOfMisspelledWord(
+            in: word, range: range, startingAt: 0, wrap: false, language: language
+        )
+        guard misspelledRange.location != NSNotFound,
+              misspelledRange.length == range.length else { return (false, []) }
+        return (true, checker.guesses(forWordRange: range, in: word, language: language) ?? [])
+    }
+
+    func completions(for word: String, language: String) -> [String] {
+        guard !Task.isCancelled else { return [] }
+        return checker.completions(
+            forPartialWordRange: NSRange(location: 0, length: (word as NSString).length),
+            in: word, language: language
+        ) ?? []
     }
 }

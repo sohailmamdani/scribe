@@ -124,7 +124,17 @@ enum KeyboardGestureResolution: Equatable {
 enum KeyboardGestureResolver {
     static let previewDistance = 12.0
     static let commitDistance = 18.0
-    static let swipeDistance = 24.0
+    static let swipeDistance = 36.0
+    static let minimumSwipeDuration = 0.10
+
+    static func shouldBeginSwipe(
+        distance: Double, keyWidth: Double, elapsed: TimeInterval,
+        enteredDifferentLetter: Bool
+    ) -> Bool {
+        enteredDifferentLetter
+            && distance >= max(swipeDistance, min(52, keyWidth * 1.15))
+            && (elapsed >= minimumSwipeDuration || distance >= max(90, keyWidth * 2.5))
+    }
     /// A symbol should require an unmistakable hold. Four hundred milliseconds
     /// was close enough to an ordinary deliberate key press that alternates
     /// could appear accidentally.
@@ -136,7 +146,8 @@ enum KeyboardGestureResolver {
         keyWidth: Double,
         keyHeight: Double,
         enteredDifferentLetter: Bool,
-        alternateGestureArmed: Bool
+        alternateGestureArmed: Bool,
+        elapsed: TimeInterval = 0
     ) -> KeyboardGestureResolution {
         let distance = hypot(deltaX, deltaY)
         let horizontalCorridor = min(14, keyWidth * 0.38)
@@ -151,7 +162,10 @@ enum KeyboardGestureResolver {
             return deltaY >= commitDistance ? .alternateCommit : .alternatePreview
         }
 
-        if enteredDifferentLetter, distance >= swipeDistance {
+        if shouldBeginSwipe(
+            distance: distance, keyWidth: keyWidth, elapsed: elapsed,
+            enteredDifferentLetter: enteredDifferentLetter
+        ) {
             return .wordSwipe
         }
 

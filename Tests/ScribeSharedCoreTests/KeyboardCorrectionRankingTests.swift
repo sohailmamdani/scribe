@@ -162,6 +162,47 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
         )
     }
 
+    func testRealWordSlipNeedsBothTouchAndDecisiveContext() {
+        let repair = candidate("for", frequency: 6_000_000_000,
+                               bigramFrequency: 3_600_000_000, spatialCost: 0.65)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "fir", originalIsKnownWord: true, isProtected: false,
+            ranked: [repair], originalFrequency: 2_300_000,
+            hasTapEvidence: true
+        ), .autoReplace)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "fir", originalIsKnownWord: true, isProtected: false,
+            ranked: [repair], originalFrequency: 2_300_000,
+            hasTapEvidence: false
+        ), .suggest)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "fir", originalIsKnownWord: true, isProtected: true,
+            ranked: [repair], originalFrequency: 2_300_000,
+            hasTapEvidence: true
+        ), .none)
+        // "a fir" is legitimate: a common pair elsewhere in the corpus is
+        // insufficient unless this context strongly favors the replacement.
+        let weakContext = candidate("for", frequency: 6_000_000_000,
+                                    bigramFrequency: 37_000_000, spatialCost: 0.65)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "fir", originalIsKnownWord: true, isProtected: false,
+            ranked: [weakContext], originalFrequency: 2_300_000,
+            hasTapEvidence: true
+        ), .suggest)
+    }
+
+    func testShortDroppedLetterCanBeRepairedWithStrongContext() {
+        let repair = candidate("the", frequency: 23_000_000_000,
+                               bigramFrequency: 1_000_000_000, spatialCost: 1)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "te", originalIsKnownWord: false, isProtected: false, ranked: [repair]
+        ), .autoReplace)
+        let noContext = candidate("the", frequency: 23_000_000_000, spatialCost: 1)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "te", originalIsKnownWord: false, isProtected: false, ranked: [noContext]
+        ), .suggest)
+    }
+
     // MARK: - Two-edit corrections
 
     /// "definately" → "definitely" is two edits and is exactly what users

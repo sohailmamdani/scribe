@@ -37,7 +37,8 @@ final class KeyboardPreferencesTests: XCTestCase {
             symbolPageTapScope: .symbolsOnly,
             keyPreviewsEnabled: false,
             hapticsEnabled: false,
-            doubleSpacePeriodEnabled: false
+            doubleSpacePeriodEnabled: false,
+            slideToTypeEnabled: false
         )
 
         store.preferences = expected
@@ -97,6 +98,7 @@ final class KeyboardPreferencesTests: XCTestCase {
         let store = SharedKeyboardPreferencesStore(defaults: defaults)
         var changed = KeyboardPreferences.standard
         changed.hapticsEnabled = false
+        changed.slideToTypeEnabled = false
         changed.symbolPageTapBehavior = .returnToLetters
         store.preferences = changed
 

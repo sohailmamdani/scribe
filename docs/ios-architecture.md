@@ -29,7 +29,15 @@ Both targets need the App Group enabled in the Apple Developer portal before ins
 
 ## Current product boundary
 
-The keyboard uses the same portrait key height, column width, four-row control grid, and spacing measured from the iOS 26 system keyboard on iPhone 17 Pro Max. Numbers remain available through `123` and the printed downward-flick alternates instead of occupying a permanent row. Its requested extension height includes a dedicated gap below the dictation bar so neither surface is compressed or allowed to touch. Common alternates can also be entered by press-and-hold selection or a named VoiceOver action. Double-space period, automatic capitalization, host-trait-aware ranked correction suggestions, conservative delimiter autocorrection with one-tap undo, hold-delete, word swiping, and space-bar cursor mode remain available. The keyboard also respects the user's iOS supplementary lexicon so names and learned terms are not replaced.
+The keyboard uses the same portrait key height, column width, four-row control grid, and spacing measured from the iOS 26 system keyboard on iPhone 17 Pro Max. Numbers remain available through `123` and the printed hold-to-select alternates instead of occupying a permanent row. Its requested extension height includes a dedicated gap below the dictation bar so neither surface is compressed or allowed to touch. Common alternates can also be entered by press-and-hold selection or a named VoiceOver action. Double-space period, automatic capitalization, host-trait-aware ranked correction suggestions, conservative delimiter autocorrection with one-tap undo, hold-delete, word swiping, and space-bar cursor mode remain available. The keyboard also respects the user's iOS supplementary lexicon so names and learned terms are not replaced.
+
+## Keyboard input verification
+
+All four key rows share one UIKit touch surface and a gap-free hit grid, including Space, punctuation, and Return. Overlapping fingers commit in touch-down order. A serial document-edit queue waits for final-word autocorrection before inserting a delimiter and any following keys; field changes and keyboard dismissal cancel outstanding edits. Corpus membership alone does not protect a typo from repair. Real-word repairs require both touch evidence and strong preceding-word context, while explicit rejections and supplementary names remain protected.
+
+Slide to Type requires both deliberate travel and gesture duration, and can be disabled in Keyboard Settings. Letter taps, hold alternates, space-bar cursor mode, and punctuation selection share the same touch lifecycle.
+
+Run `swift test` for hit-region coverage, overlapping input order, cancellation, gesture thresholds, and correction-policy regressions. With an iOS simulator booted, run `scripts/test-ios-keyboard.sh [simulator-udid]` to exercise the production UIKit touch surface and `UITextChecker` against the shipped dictionaries. The integration probe covers fast delimiter correction, queued next-word input, ordinary typos, short dropped letters, contextual real-word slips, names, explicit rejection, and language restrictions.
 
 ## TestFlight release
 

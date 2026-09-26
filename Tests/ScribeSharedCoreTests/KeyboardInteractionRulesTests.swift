@@ -159,13 +159,35 @@ final class KeyboardInteractionRulesTests: XCTestCase {
         XCTAssertEqual(resolve(x: 0, y: 18, alternateGestureArmed: true), .alternateCommit)
         XCTAssertEqual(resolve(x: 0, y: 56), .primary)
         XCTAssertEqual(resolve(x: 18, y: 2, enteredDifferentLetter: true), .primary)
-		XCTAssertEqual(resolve(x: 25, y: 2, enteredDifferentLetter: true), .wordSwipe)
+		XCTAssertEqual(resolve(x: 25, y: 2, enteredDifferentLetter: true), .primary)
 		XCTAssertEqual(
 			resolve(x: 0, y: 56, enteredDifferentLetter: true, alternateGestureArmed: true),
 			.alternateCommit
 		)
-		XCTAssertEqual(resolve(x: 22, y: 56, enteredDifferentLetter: true), .wordSwipe)
+		XCTAssertEqual(resolve(x: 22, y: 56, enteredDifferentLetter: true), .primary)
         XCTAssertEqual(resolve(x: 0, y: -24), .primary)
+    }
+
+    func testSwipeRequiresTravelAndTimeEvenAcrossAKeyBoundary() {
+        XCTAssertFalse(KeyboardGestureResolver.shouldBeginSwipe(
+            distance: 24, keyWidth: 32, elapsed: 0.2, enteredDifferentLetter: true
+        ))
+        XCTAssertFalse(KeyboardGestureResolver.shouldBeginSwipe(
+            distance: 50, keyWidth: 32, elapsed: 0.04, enteredDifferentLetter: true
+        ))
+        XCTAssertTrue(KeyboardGestureResolver.shouldBeginSwipe(
+            distance: 150, keyWidth: 37, elapsed: 0.04, enteredDifferentLetter: true
+        ))
+        XCTAssertTrue(KeyboardGestureResolver.shouldBeginSwipe(
+            distance: 43, keyWidth: 37, elapsed: 0.12, enteredDifferentLetter: true
+        ))
+        XCTAssertFalse(KeyboardGestureResolver.shouldBeginSwipe(
+            distance: 60, keyWidth: 37, elapsed: 0.2, enteredDifferentLetter: false
+        ))
+        XCTAssertEqual(KeyboardGestureResolver.resolve(
+            deltaX: 60, deltaY: 0, keyWidth: 37, keyHeight: 45,
+            enteredDifferentLetter: true, alternateGestureArmed: false, elapsed: 0.15
+        ), .wordSwipe)
     }
 
     func testAlternateHoldRequiresADeliberatePause() {
