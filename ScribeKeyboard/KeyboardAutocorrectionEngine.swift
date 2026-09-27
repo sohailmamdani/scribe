@@ -159,12 +159,19 @@ actor KeyboardAutocorrectionEngine {
         includeCompletions: Bool = true
     ) async -> [KeyboardCorrection] {
         let original = word.lowercased()
-        guard original.count >= 2, language.lowercased().hasPrefix("en") else { return [] }
-        let lexicon = await loadedLexicon()
-        guard !Task.isCancelled else { return [] }
-
+        guard language.lowercased().hasPrefix("en"), !Task.isCancelled else { return [] }
         let isProtected = protectedWordLookup.contains(original)
             || userLexiconWords.contains(original)
+        if word == "i" {
+            // Offer while typing; only commit once Space/punctuation closes
+            // the word. `in`, `if`, `is`, and `iPhone` remain ordinary input.
+            return isProtected ? [] : [KeyboardCorrection(
+                text: "I", automaticallyReplaces: !includeCompletions
+            )]
+        }
+        guard original.count >= 2 else { return [] }
+        let lexicon = await loadedLexicon()
+        guard !Task.isCancelled else { return [] }
         let preferredContraction = KeyboardEditingRules
             .preferredContraction(for: original)?
             .lowercased()
@@ -211,29 +218,38 @@ actor KeyboardAutocorrectionEngine {
                     evidence: evidence
                 ),
                 acceptedCount: acceptedCorrections[Self.pairKey(original, candidate)] ?? 0,
-                changesFirstLetter: original.first != candidate.first
+                changesFirstLetter: original.first != candidate.first,
+                isNeighborSubstitution: Self.isNeighborSubstitution(original, candidate)
             )
         }
 
         let ranked = KeyboardCorrectionRanking.rank(candidates)
+        let originalFrequency = lexicon.frequencies[original] ?? 0
+        let originalBigramFrequency = previousWord.map {
+            Self.bigramFrequency(first: $0, second: original, in: lexicon)
+        } ?? 0
         let decision = KeyboardCorrectionRanking.decision(
             original: original,
             originalIsKnownWord: !spelling.isMisspelled,
             isProtected: isProtected,
             ranked: ranked,
-            originalFrequency: lexicon.frequencies[original] ?? 0,
-            originalBigramFrequency: previousWord.map {
-                Self.bigramFrequency(first: $0, second: original, in: lexicon)
-            } ?? 0,
+            originalFrequency: originalFrequency,
+            originalBigramFrequency: originalBigramFrequency,
             hasTapEvidence: evidence.count == original.count && !evidence.isEmpty
         )
 
         var suggestions: [KeyboardCorrection] = []
-        // A correctly spelled word should not fill the bar with unrelated
-        // replacements ("hello" -> "hell", "help"). Prefer completions unless
-        // touch and context actually justify a real-word repair.
-        if decision != .none, spelling.isMisspelled || decision == .autoReplace {
-            suggestions = ranked.prefix(Self.maximumSuggestions).enumerated().map { index, candidate in
+        // Valid-word alternatives can be useful without being safe enough for
+        // automatic replacement ("looking fir" -> "for"). Require evidence
+        // from context, rather than showing every edit-distance neighbor.
+        let offered = spelling.isMisspelled || decision == .autoReplace ? ranked : ranked.filter {
+            KeyboardCorrectionRanking.shouldSuggestContextualAlternative(
+                $0, original: original, originalFrequency: originalFrequency,
+                originalBigramFrequency: originalBigramFrequency
+            )
+        }
+        if decision != .none {
+            suggestions = offered.prefix(Self.maximumSuggestions).enumerated().map { index, candidate in
                 KeyboardCorrection(
                     text: candidate.word,
                     automaticallyReplaces: index == 0 && decision == .autoReplace
@@ -409,6 +425,13 @@ actor KeyboardAutocorrectionEngine {
 
     private static func maximumDistance(forLength length: Int) -> Int {
         length >= 8 ? 3 : (length >= 4 ? 2 : 1)
+    }
+
+    private static func isNeighborSubstitution(_ original: String, _ candidate: String) -> Bool {
+        guard original.count == candidate.count else { return false }
+        let differences = zip(original, candidate).filter { $0 != $1 }
+        guard differences.count == 1, let pair = differences.first else { return false }
+        return SwipeWordDecoder.areNeighbors(pair.0, pair.1)
     }
 
     private static func letterMask(_ word: String) -> UInt32 {

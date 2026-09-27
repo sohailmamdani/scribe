@@ -110,6 +110,33 @@ final class KeyboardEditingRulesTests: XCTestCase {
         XCTAssertNil(
             KeyboardEditingRules.wordBeforeAutocorrectionWord(contextBefore: "teh")
         )
+        for context in ["looking. fir", "looking! fir", "looking? fir", "looking\nfir"] {
+            XCTAssertNil(KeyboardEditingRules.wordBeforeAutocorrectionWord(contextBefore: context))
+        }
+    }
+
+    func testStandalonePronounCanReachTheCorrectionEngine() {
+        for context in ["i", "if i", "then (i"] {
+            XCTAssertEqual(KeyboardEditingRules.autocorrectionWord(
+                contextBefore: context, fieldKind: .text, autocorrectionEnabled: true
+            ), "i")
+        }
+        for context in ["a", "x", "1i", "item_i", "/i", "@i", "example.i"] {
+            XCTAssertNil(KeyboardEditingRules.autocorrectionWord(
+                contextBefore: context, fieldKind: .text, autocorrectionEnabled: true
+            ))
+        }
+        for kind in [KeyboardFieldKind.URL, .email, .number, .phone] {
+            XCTAssertNil(KeyboardEditingRules.autocorrectionWord(
+                contextBefore: "i", fieldKind: kind, autocorrectionEnabled: true
+            ))
+        }
+        XCTAssertNil(KeyboardEditingRules.autocorrectionWord(
+            contextBefore: "i", fieldKind: .text, autocorrectionEnabled: false
+        ))
+        XCTAssertEqual(KeyboardEditingRules.autocorrectionWord(
+            contextBefore: "if in is", fieldKind: .text, autocorrectionEnabled: true
+        ), "is")
     }
 
     func testAutocorrectionRespectsHostTraitsAndFieldKind() {
@@ -137,6 +164,9 @@ final class KeyboardEditingRulesTests: XCTestCase {
     }
 
     func testAutocorrectionPreservesTypedCapitalization() {
+        XCTAssertEqual(KeyboardEditingRules.replacement("I", matchingCapitalizationOf: "i"), "I")
+        XCTAssertNil(KeyboardEditingRules.replacement("I", matchingCapitalizationOf: "I"))
+        XCTAssertNil(KeyboardEditingRules.replacement("Word", matchingCapitalizationOf: "word"))
         XCTAssertEqual(
             KeyboardEditingRules.replacement("the", matchingCapitalizationOf: "Teh"),
             "The"

@@ -10,7 +10,8 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
         systemRank: Int? = 0,
         spatialCost: Double = 0.3,
         acceptedCount: Int = 0,
-        changesFirstLetter: Bool = false
+        changesFirstLetter: Bool = false,
+        isNeighborSubstitution: Bool = false
     ) -> KeyboardCorrectionCandidate {
         KeyboardCorrectionCandidate(
             word: word,
@@ -20,7 +21,8 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
             systemRank: systemRank,
             spatialCost: spatialCost,
             acceptedCount: acceptedCount,
-            changesFirstLetter: changesFirstLetter
+            changesFirstLetter: changesFirstLetter,
+            isNeighborSubstitution: isNeighborSubstitution
         )
     }
 
@@ -148,9 +150,9 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
         )
     }
 
-    /// Very short words stay hands-off: at three characters almost any edit
-    /// produces a different word rather than a repair.
-    func testTwoCharacterWordsAreNotAutomaticallyReplaced() {
+    /// Short substitutions need independent evidence; frequency alone must
+    /// not turn an ambiguous token into a different word.
+    func testUnsupportedShortSubstitutionsRemainSuggestions() {
         XCTAssertEqual(
             KeyboardCorrectionRanking.decision(
                 original: "im",
@@ -201,6 +203,50 @@ final class KeyboardCorrectionRankingTests: XCTestCase {
         XCTAssertEqual(KeyboardCorrectionRanking.decision(
             original: "te", originalIsKnownWord: false, isProtected: false, ranked: [noContext]
         ), .suggest)
+    }
+
+    func testClearShortAdjacentKeyTypoCanBeCorrected() {
+        let repair = candidate("if", frequency: 1_134_987_907,
+                               changesFirstLetter: true, isNeighborSubstitution: true)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "jf", originalIsKnownWord: false, isProtected: false, ranked: [repair]
+        ), .autoReplace)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "id", originalIsKnownWord: true, isProtected: false, ranked: [repair]
+        ), .suggest)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "jf", originalIsKnownWord: false, isProtected: true, ranked: [repair]
+        ), .none)
+        let distant = candidate("if", frequency: 1_134_987_907, changesFirstLetter: true)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "qf", originalIsKnownWord: false, isProtected: false, ranked: [distant]
+        ), .suggest)
+        let ambiguous = candidate("of", frequency: 1_134_987_907,
+                                  changesFirstLetter: true, isNeighborSubstitution: true)
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "jf", originalIsKnownWord: false, isProtected: false,
+            ranked: KeyboardCorrectionRanking.rank([repair, ambiguous])
+        ), .suggest)
+    }
+
+    func testContextualSuggestionDoesNotRequireAutomaticReplacementConfidence() {
+        let repair = candidate("for", frequency: 6_000_000_000,
+                               bigramFrequency: 3_600_000_000, systemRank: nil, spatialCost: 1)
+        XCTAssertTrue(KeyboardCorrectionRanking.shouldSuggestContextualAlternative(
+            repair, original: "fir", originalFrequency: 2_300_000, originalBigramFrequency: 0
+        ))
+        XCTAssertEqual(KeyboardCorrectionRanking.decision(
+            original: "fir", originalIsKnownWord: true, isProtected: false,
+            ranked: [repair], originalFrequency: 2_300_000
+        ), .suggest)
+        let weak = candidate("for", frequency: 6_000_000_000, bigramFrequency: 37_000_000)
+        XCTAssertFalse(KeyboardCorrectionRanking.shouldSuggestContextualAlternative(
+            weak, original: "fir", originalFrequency: 2_300_000, originalBigramFrequency: 0
+        ))
+        XCTAssertFalse(KeyboardCorrectionRanking.shouldSuggestContextualAlternative(
+            repair, original: "fir", originalFrequency: 6_000_000_000,
+            originalBigramFrequency: 3_000_000_000
+        ))
     }
 
     // MARK: - Two-edit corrections

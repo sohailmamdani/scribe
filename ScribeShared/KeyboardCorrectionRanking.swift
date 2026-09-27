@@ -45,6 +45,8 @@ nonisolated struct KeyboardCorrectionCandidate: Equatable, Sendable {
     let acceptedCount: Int
     /// Whether the correction rewrites the opening letter.
     let changesFirstLetter: Bool
+    /// A single same-length substitution between adjacent keyboard keys.
+    let isNeighborSubstitution: Bool
 
     init(
         word: String,
@@ -54,7 +56,8 @@ nonisolated struct KeyboardCorrectionCandidate: Equatable, Sendable {
         systemRank: Int?,
         spatialCost: Double,
         acceptedCount: Int,
-        changesFirstLetter: Bool = false
+        changesFirstLetter: Bool = false,
+        isNeighborSubstitution: Bool = false
     ) {
         self.word = word
         self.distance = distance
@@ -64,6 +67,7 @@ nonisolated struct KeyboardCorrectionCandidate: Equatable, Sendable {
         self.spatialCost = spatialCost
         self.acceptedCount = acceptedCount
         self.changesFirstLetter = changesFirstLetter
+        self.isNeighborSubstitution = isNeighborSubstitution
     }
 }
 
@@ -191,6 +195,14 @@ nonisolated enum KeyboardCorrectionRanking {
         }
 
         if original.count == 2 {
+            // A misspelled two-letter token can still have an unambiguous
+            // adjacent-key repair (`jf` -> `if`). Known words already took the
+            // stricter branch above; arbitrary short substitutions stay put.
+            if best.word.count == 2, best.distance == 1,
+               best.isNeighborSubstitution, best.systemRank != nil,
+               best.frequency >= 100_000_000, margin >= autoReplaceMargin {
+                return .autoReplace
+            }
             // Repair a dropped letter in context ("in te" -> "in the"), not
             // arbitrary two-letter substitutions such as "im" -> "in".
             guard best.distance == 1, best.word.count == 3,
@@ -222,6 +234,30 @@ nonisolated enum KeyboardCorrectionRanking {
         default:
             return .suggest
         }
+    }
+
+    /// Showing a contextual alternative must not require enough confidence
+    /// to replace a valid word silently. Still compare against keeping the
+    /// original, and require a strong association with the previous word so
+    /// common but irrelevant neighbors don't fill the bar.
+    static func shouldSuggestContextualAlternative(
+        _ candidate: KeyboardCorrectionCandidate,
+        original: String,
+        originalFrequency: Int64,
+        originalBigramFrequency: Int64
+    ) -> Bool {
+        guard candidate.distance == 1, candidate.frequency > 1,
+              candidate.bigramFrequency >= 1_000_000,
+              Double(candidate.bigramFrequency) >= Double(candidate.frequency) * 0.02,
+              Double(candidate.bigramFrequency) >= Double(max(1, originalBigramFrequency)) * 5 else {
+            return false
+        }
+        let unchanged = KeyboardCorrectionCandidate(
+            word: original, distance: 0, frequency: originalFrequency,
+            bigramFrequency: originalBigramFrequency, systemRank: 0,
+            spatialCost: 0, acceptedCount: 0
+        )
+        return score(candidate) + recognizedOneEditAutoReplaceMargin <= score(unchanged)
     }
 
     /// Cost of believing the user meant `candidate` while typing `original`.

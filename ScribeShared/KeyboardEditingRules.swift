@@ -164,9 +164,15 @@ nonisolated enum KeyboardEditingRules {
                 character.isLetter || character == "'" || character == "’"
             }.reversed()
         )
-        guard word.count >= 2,
+        guard word.count >= 2 || word == "i",
               word.contains(where: \Character.isLetter),
               !hasUnexpectedCapitalization(word) else {
+            return nil
+        }
+        // Only admit the standalone English pronoun, not a suffix of an
+        // identifier, address, or path such as `item_i`, `1i`, or `/i`.
+        if word == "i", let preceding = contextBefore.dropLast().last,
+           preceding.isLetter || preceding.isNumber || "@_./-".contains(preceding) {
             return nil
         }
         return word
@@ -179,6 +185,8 @@ nonisolated enum KeyboardEditingRules {
             remaining.removeLast()
         }
         while let last = remaining.last, !last.isLetter {
+            // A previous sentence is not evidence for this word.
+            if ".!?\n\r;:".contains(last) { return nil }
             remaining.removeLast()
         }
         let word = String(
@@ -194,12 +202,14 @@ nonisolated enum KeyboardEditingRules {
         guard !trimmed.isEmpty,
               !trimmed.contains(where: \Character.isWhitespace),
               isWordSafeCorrectionCandidate(trimmed),
-              trimmed.caseInsensitiveCompare(original) != .orderedSame else {
+              trimmed.caseInsensitiveCompare(original) != .orderedSame
+                || (original == "i" && trimmed == "I") else {
             return nil
         }
 
         // The pronoun I remains capitalized even when the user entered a
         // lowercase missing-apostrophe form such as `im` or `ive`.
+        if trimmed == "I" { return "I" }
         if trimmed.lowercased().hasPrefix("i'") {
             return "I" + trimmed.dropFirst().lowercased()
         }

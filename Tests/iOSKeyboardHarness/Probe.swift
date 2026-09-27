@@ -26,7 +26,8 @@ struct KeyboardIntegrationProbe {
         for (context, expected) in [
             ("teh", "the"), ("bread ans", "and"), ("this is smple", "simple"),
             ("recieve", "receive"), ("definately", "definitely"),
-            ("in te", "the"), ("dont", "don't"), ("thw", "the"), ("thst", "that")
+            ("in te", "the"), ("dont", "don't"), ("thw", "the"), ("thst", "that"),
+            ("For example jf", "if"), ("jf", "if"), ("if i", "I")
         ] {
             let word = String(context.split(separator: " ").last!)
             let start = ProcessInfo.processInfo.systemUptime
@@ -38,12 +39,31 @@ struct KeyboardIntegrationProbe {
             print("PASS \(context) -> \(expected) (\(Int((ProcessInfo.processInfo.systemUptime - start) * 1000)) ms)")
         }
 
-        for context in ["hello", "a fir", "looking fir", "form", "well", "its"] {
+        for context in ["hello", "a fir", "looking fir", "form", "well", "its", "as if", "an id", "if in is"] {
             let word = String(context.split(separator: " ").last!)
             let result = await engine.corrections(
                 for: word, contextBefore: context, language: "en-US", evidence: [], includeCompletions: false
             )
             precondition(!result.contains(where: \.automaticallyReplaces), "Unwanted correction: \(context)")
+        }
+        let contextual = await engine.corrections(
+            for: "fir", contextBefore: "looking fir", language: "en-US", evidence: [], includeCompletions: false
+        )
+        precondition(contextual.contains(where: { $0.text == "for" && !$0.automaticallyReplaces }),
+                     "Contextual alternative hidden: \(contextual)")
+        for context in ["a fir", "looking. fir", "looking\nfir"] {
+            let result = await engine.corrections(
+                for: "fir", contextBefore: context, language: "en-US", evidence: [], includeCompletions: false
+            )
+            precondition(!result.contains(where: { $0.text == "for" }), "Unrelated context: \(context)")
+        }
+        let partialPronoun = await engine.corrections(
+            for: "i", contextBefore: "if i", language: "en-US", evidence: [], includeCompletions: true
+        )
+        precondition(!partialPronoun.contains(where: \.automaticallyReplaces), "Premature I capitalization")
+        for word in ["in", "if", "is", "iPhone"] {
+            let result = await engine.corrections(for: word, contextBefore: word, language: "en-US", evidence: [])
+            precondition(!result.contains(where: { $0.text == "I" }), "Pronoun rule changed \(word)")
         }
         let evidence = [
             KeyboardTapEvidence(character: "f", normalizedDistances: ["f": 0]),
@@ -66,6 +86,8 @@ struct KeyboardIntegrationProbe {
         precondition(!name.contains(where: \.automaticallyReplaces), "Contact rewritten as contraction")
         let otherLanguage = await engine.corrections(for: "teh", contextBefore: "teh", language: "de-DE", evidence: [])
         precondition(otherLanguage.isEmpty, "English repair applied to another language")
+        let otherPronoun = await engine.corrections(for: "i", contextBefore: "i", language: "de-DE", evidence: [])
+        precondition(otherPronoun.isEmpty, "English pronoun rule applied to another language")
         print("PASS real words, names, rejection, and language protection")
 
         // Real UIKit TouchViews, including out-of-order lifts and overlapping
@@ -112,6 +134,39 @@ struct KeyboardIntegrationProbe {
         await queue.waitUntilIdle()
         precondition(text == "the cat", "Final-word correction and input order: \(text)")
         print("PASS immediate delimiter with next-word input")
+
+        // Exercise extraction, final-word decisions, case preservation, and
+        // serialized fast typing together using the user's reported sentence.
+        text = ""
+        for character in "For example jf i type in this sentence " {
+            let value = String(character)
+            queue.enqueue {
+                if value == " ", let word = KeyboardEditingRules.autocorrectionWord(
+                    contextBefore: text, fieldKind: .text, autocorrectionEnabled: true
+                ) {
+                    let result = await engine.corrections(
+                        for: word, contextBefore: text, language: "en-US", evidence: [], includeCompletions: false
+                    )
+                    if let suggestion = result.first(where: \.automaticallyReplaces),
+                       let replacement = KeyboardEditingRules.replacement(suggestion.text, matchingCapitalizationOf: word) {
+                        text.removeLast(word.count)
+                        text += replacement
+                    }
+                }
+                text += value
+            }
+        }
+        await queue.waitUntilIdle()
+        precondition(text == "For example if I type in this sentence ", "Sentence regression: \(text)")
+        print("PASS reported sentence: \(text)")
+        for (word, replacement) in [("i", "I"), ("jf", "if")] {
+            await engine.recordRejected(original: word, replacement: replacement)
+            let result = await engine.corrections(
+                for: word, contextBefore: "if \(word)", language: "en-US", evidence: [], includeCompletions: false
+            )
+            precondition(!result.contains(where: \.automaticallyReplaces), "Short-word undo ignored: \(word)")
+        }
+        print("PASS short-word rejection and pronoun timing")
         print("All iOS keyboard integration checks passed.")
     }
 }
