@@ -24,6 +24,7 @@ struct KeyboardRootView: View {
     let fieldKind: () -> KeyboardFieldKind
     let capitalizationMode: () -> KeyboardCapitalizationMode
     let autocorrectionEnabled: () -> Bool
+    let inputLanguage: () -> String
     let correctionsForWord: (String, String?, [KeyboardTapEvidence], Bool) async -> [KeyboardCorrection]
     let recordAcceptedCorrection: (String, String) -> Void
     let recordRejectedCorrection: (String, String) -> Void
@@ -46,9 +47,6 @@ struct KeyboardRootView: View {
 	@State private var correctionCandidates: [KeyboardCorrection] = []
 	@State private var appliedCorrection: AppliedCorrection?
 	@State private var localMutationGraceDeadline = Date.distantPast
-    /// Suggestions are computed while typing and refreshed for the final word
-    /// before a delimiter is committed by the input queue.
-	@State private var pendingCorrection: PendingCorrection?
 	@State private var correctionTask: Task<Void, Never>?
     /// An undo takes effect immediately, even before the correction actor has
     /// persisted the rejection to defaults.
@@ -108,11 +106,6 @@ struct KeyboardRootView: View {
         let original: String
         let replacement: String
         let suffix: String
-    }
-
-    private struct PendingCorrection: Equatable {
-        let word: String
-        let candidates: [KeyboardCorrection]
     }
 
     private var usesCompactMetrics: Bool { verticalSizeClass == .compact }
@@ -1146,7 +1139,7 @@ struct KeyboardRootView: View {
             let value = layout == .letters && shiftState.usesUppercase && character.isLetter
                 ? String(character).uppercased()
                 : String(character)
-            if ".,!?;:".contains(character) {
+            if KeyboardEditingRules.isWordBoundary(character) {
                 await insertDelimiter(value)
             } else {
                 manualInsert(
@@ -1190,11 +1183,16 @@ struct KeyboardRootView: View {
     }
 
     private func commitAlternate(_ alternate: Character, from key: KeyID) {
-        inputQueue.enqueue { commitAlternateNow(alternate, from: key) }
+        inputQueue.enqueue { await commitAlternateNow(alternate, from: key) }
     }
 
-    private func commitAlternateNow(_ alternate: Character, from key: KeyID) {
-        manualInsert(String(alternate))
+    private func commitAlternateNow(_ alternate: Character, from key: KeyID) async {
+        if KeyboardEditingRules.isWordBoundary(alternate) {
+            await insertDelimiter(String(alternate))
+        } else {
+            manualInsert(String(alternate))
+        }
+        guard !Task.isCancelled else { return }
         if case .character(let primary) = key,
            layout == .letters,
            primary.isLetter,
@@ -1369,73 +1367,34 @@ struct KeyboardRootView: View {
         adjustTextPosition(offset)
     }
 
-    /// Applies the final-word result after the serialized boundary lookup.
-    /// The engine owns contractions too, so names, language, and rejected
-    /// corrections follow the same policy as ordinary spelling repairs.
-    @discardableResult
-    private func applyAutocorrectionIfNeeded() -> AppliedCorrection? {
-        guard let word = KeyboardEditingRules.autocorrectionWord(
-            contextBefore: context().0,
-            fieldKind: fieldKind(),
-            autocorrectionEnabled: autocorrectionEnabled()
-        ) else {
-            return nil
-        }
-
-        let pendingReplacement = pendingCorrection
-            .flatMap { $0.word == word ? $0 : nil }?
-            .candidates
-            .first(where: \.automaticallyReplaces)?
-            .text
-        let normalizedWord = word.lowercased()
-        guard !sessionRejectedAutocorrectionWords.contains(normalizedWord),
-              !KeyboardEditingRules.isRejectedAutocorrectionWord(normalizedWord),
-              let replacement = pendingReplacement else { return nil }
-
-        for _ in word { proxyDeleteBackward() }
-        proxyInsertText(replacement)
-        lastInsertedText = nil
-        correctionCandidates = []
-        pendingCorrection = nil
-        tapEvidence = []
-        return AppliedCorrection(
-            original: word,
-            replacement: replacement,
-            suffix: replacement
-        )
-    }
-
     private func insertDelimiter(_ delimiter: String, resetsSpaceTap: Bool = true) async {
-        // Stop speculative partial-word work and ask for the final word. Later
-        // keystrokes are queued, so even an immediate Space gets this result.
         correctionTask?.cancel()
-        let before = context()
-        let documentID = clientDocumentID()
-        if let word = currentAutocorrectionWord() {
-            let suggestions = await correctionsForWord(word, before.0, evidence(matching: word), false)
-            guard !Task.isCancelled else { return }
-            let after = context()
-            guard before.0 == after.0, before.1 == after.1,
-                  clientDocumentID() == documentID else {
-                inputQueue.cancel()
-                return
-            }
-            pendingCorrection = PendingCorrection(
-                word: word,
-                candidates: suggestions.compactMap { suggestion in
-                    guard let replacement = KeyboardEditingRules.replacement(
-                        suggestion.text, matchingCapitalizationOf: word
-                    ) else { return nil }
-                    return KeyboardCorrection(
-                        text: replacement,
-                        automaticallyReplaces: suggestion.automaticallyReplaces,
-                        isCompletion: suggestion.isCompletion
-                    )
-                }
-            )
+        let result = await KeyboardWordBoundaryEditor.correctCompletedWord(
+            context: context,
+            documentID: clientDocumentID,
+            fieldKind: fieldKind(),
+            capitalization: capitalizationMode(),
+            autocorrectionEnabled: autocorrectionEnabled(),
+            language: inputLanguage(),
+            isRejected: {
+                sessionRejectedAutocorrectionWords.contains($0)
+                    || KeyboardEditingRules.isRejectedAutocorrectionWord($0)
+            },
+            lookup: { word, before in
+                await correctionsForWord(word, before, evidence(matching: word), false)
+            },
+            deleteBackward: proxyDeleteBackward,
+            insertText: proxyInsertText
+        )
+        guard case .ready(let correction) = result else {
+            inputQueue.cancel()
+            return
         }
-        guard !Task.isCancelled else { return }
-        let correction = applyAutocorrectionIfNeeded()
+        if correction != nil {
+            lastInsertedText = nil
+            correctionCandidates = []
+            tapEvidence = []
+        }
         manualInsert(
             delimiter,
             resetsSpaceTap: resetsSpaceTap,
@@ -1524,7 +1483,6 @@ struct KeyboardRootView: View {
     private func refreshCorrectionCandidates() async {
         guard appliedCorrection == nil, let word = currentAutocorrectionWord() else {
             correctionCandidates = []
-            pendingCorrection = nil
             return
         }
 
@@ -1551,7 +1509,6 @@ struct KeyboardRootView: View {
             )
         }
         correctionCandidates = mapped
-        pendingCorrection = PendingCorrection(word: word, candidates: mapped)
     }
 
     /// Speculative suggestions yield to input and cancel stale partial words.
@@ -1588,7 +1545,6 @@ struct KeyboardRootView: View {
         proxyInsertText(acceptedText)
         lastInsertedText = nil
         correctionCandidates = []
-        pendingCorrection = nil
         tapEvidence = []
         lastSpaceTapAt = Date()
         appliedCorrection = AppliedCorrection(
@@ -1616,13 +1572,12 @@ struct KeyboardRootView: View {
         for _ in appliedCorrection.suffix { proxyDeleteBackward() }
         let delimiter = String(appliedCorrection.suffix.dropFirst(appliedCorrection.replacement.count))
         proxyInsertText(appliedCorrection.original + delimiter)
-        sessionRejectedAutocorrectionWords.insert(appliedCorrection.original.lowercased())
-        recordRejectedCorrection(
-            appliedCorrection.original,
-            appliedCorrection.replacement
-        )
+        if KeyboardEditingRules.capitalizedEnglishPronoun(appliedCorrection.original)
+            != appliedCorrection.replacement {
+            sessionRejectedAutocorrectionWords.insert(appliedCorrection.original.lowercased())
+            recordRejectedCorrection(appliedCorrection.original, appliedCorrection.replacement)
+        }
         self.appliedCorrection = nil
-        pendingCorrection = nil
         tapEvidence = []
         scheduleCorrectionRefresh()
         KeyboardHaptics.keyDown()

@@ -13,6 +13,7 @@ xcrun --sdk iphonesimulator swiftc -O -parse-as-library \
     ScribeShared/KeyboardCorrectionRanking.swift \
     ScribeShared/KeyboardInputQueue.swift \
     ScribeKeyboard/KeyboardAutocorrectionEngine.swift \
+    ScribeKeyboard/KeyboardWordBoundaryEditor.swift \
     ScribeKeyboard/KeyboardTouchSurface.swift \
     ScribeKeyboard/SwipeWordDecoder.swift \
     Tests/iOSKeyboardHarness/Probe.swift \

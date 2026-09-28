@@ -75,6 +75,9 @@ final class KeyboardViewController: UIInputViewController {
             autocorrectionEnabled: { [weak self] in
                 self?.textDocumentProxy.autocorrectionType != .no
             },
+            inputLanguage: { [weak self] in
+                self?.textDocumentProxy.documentInputMode?.primaryLanguage ?? "en-US"
+            },
             correctionsForWord: { [weak self] word, contextBefore, evidence, includeCompletions in
                 guard let self else { return [] }
                 let language = await MainActor.run {

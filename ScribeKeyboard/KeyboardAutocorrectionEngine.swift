@@ -162,11 +162,11 @@ actor KeyboardAutocorrectionEngine {
         guard language.lowercased().hasPrefix("en"), !Task.isCancelled else { return [] }
         let isProtected = protectedWordLookup.contains(original)
             || userLexiconWords.contains(original)
-        if word == "i" {
+        if let capitalized = KeyboardEditingRules.capitalizedEnglishPronoun(word) {
             // Offer while typing; only commit once Space/punctuation closes
             // the word. `in`, `if`, `is`, and `iPhone` remain ordinary input.
-            return isProtected ? [] : [KeyboardCorrection(
-                text: "I", automaticallyReplaces: !includeCompletions
+            return [KeyboardCorrection(
+                text: capitalized, automaticallyReplaces: !includeCompletions
             )]
         }
         guard original.count >= 2 else { return [] }
@@ -327,6 +327,9 @@ actor KeyboardAutocorrectionEngine {
     }
 
     func recordRejected(original: String, replacement: String) {
+        // Undo restores this occurrence; it must not turn off capitalization
+        // for every future I or I'd in the user's documents.
+        guard KeyboardEditingRules.capitalizedEnglishPronoun(original) != replacement else { return }
         let normalized = original.lowercased()
         if protectedWordLookup.insert(normalized).inserted {
             protectedWords.append(normalized)

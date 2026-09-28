@@ -27,7 +27,9 @@ struct KeyboardIntegrationProbe {
             ("teh", "the"), ("bread ans", "and"), ("this is smple", "simple"),
             ("recieve", "receive"), ("definately", "definitely"),
             ("in te", "the"), ("dont", "don't"), ("thw", "the"), ("thst", "that"),
-            ("For example jf", "if"), ("jf", "if"), ("if i", "I")
+            ("For example jf", "if"), ("jf", "if"), ("if i", "I"),
+            ("think i'd", "I'd"), ("think i’d", "I’d"), ("think i'm", "I'm"),
+            ("think i’m", "I’m"), ("think i'll", "I'll"), ("think i’ve", "I’ve")
         ] {
             let word = String(context.split(separator: " ").last!)
             let start = ProcessInfo.processInfo.systemUptime
@@ -135,38 +137,94 @@ struct KeyboardIntegrationProbe {
         precondition(text == "the cat", "Final-word correction and input order: \(text)")
         print("PASS immediate delimiter with next-word input")
 
-        // Exercise extraction, final-word decisions, case preservation, and
-        // serialized fast typing together using the user's reported sentence.
-        text = ""
-        for character in "For example jf i type in this sentence " {
-            let value = String(character)
-            queue.enqueue {
-                if value == " ", let word = KeyboardEditingRules.autocorrectionWord(
-                    contextBefore: text, fieldKind: .text, autocorrectionEnabled: true
-                ) {
-                    let result = await engine.corrections(
-                        for: word, contextBefore: text, language: "en-US", evidence: [], includeCompletions: false
-                    )
-                    if let suggestion = result.first(where: \.automaticallyReplaces),
-                       let replacement = KeyboardEditingRules.replacement(suggestion.text, matchingCapitalizationOf: word) {
-                        text.removeLast(word.count)
-                        text += replacement
-                    }
-                }
-                text += value
+        // Use the same boundary editor as KeyboardRootView with a real UIKit
+        // text document, including host traits and pre-existing user state.
+        await engine.updateSupplementaryLexicon(entries: [
+            .init(userInput: "i", documentText: "I"),
+            .init(userInput: "i'd", documentText: "I'd")
+        ])
+        defaults.set(["i", "i'd"], forKey: KeyboardEditingRules.rejectedAutocorrectionWordsKey)
+        let persistedEngine = KeyboardAutocorrectionEngine(words: words, bigrams: bigrams, defaults: defaults)
+        for word in ["i", "i'd", "i’d", "i'm", "i’ll", "i've"] {
+            await engine.recordRejected(original: word, replacement: KeyboardEditingRules.capitalizedEnglishPronoun(word)!)
+            for candidateEngine in [engine, persistedEngine] {
+                let result = await candidateEngine.corrections(
+                    for: word, contextBefore: "think " + word, language: "en-US", evidence: [], includeCompletions: false
+                )
+                precondition(result.first(where: \.automaticallyReplaces)?.text == KeyboardEditingRules.capitalizedEnglishPronoun(word),
+                             "Personal lexicon or old rejection disabled capitalization: \(word)")
             }
         }
-        await queue.waitUntilIdle()
-        precondition(text == "For example if I type in this sentence ", "Sentence regression: \(text)")
-        print("PASS reported sentence: \(text)")
-        for (word, replacement) in [("i", "I"), ("jf", "if")] {
-            await engine.recordRejected(original: word, replacement: replacement)
-            let result = await engine.corrections(
-                for: word, contextBefore: "if \(word)", language: "en-US", evidence: [], includeCompletions: false
-            )
-            precondition(!result.contains(where: \.automaticallyReplaces), "Short-word undo ignored: \(word)")
+        let document = UITextView()
+        func replay(_ input: String, expected: String, spelling: Bool = true,
+                    capitalization: KeyboardCapitalizationMode = .sentences,
+                    field: KeyboardFieldKind = .text, language: String = "en-US") async {
+            document.text = ""
+            for character in input {
+                queue.enqueue {
+                    if KeyboardEditingRules.isWordBoundary(character) {
+                        let result = await KeyboardWordBoundaryEditor.correctCompletedWord(
+                            context: { (document.text, "") }, documentID: { "test-document" },
+                            fieldKind: field, capitalization: capitalization,
+                            autocorrectionEnabled: spelling, language: language,
+                            isRejected: { KeyboardEditingRules.isRejectedAutocorrectionWord($0, defaults: defaults) },
+                            lookup: { word, before in
+                                await persistedEngine.corrections(for: word, contextBefore: before,
+                                    language: language, evidence: [], includeCompletions: false)
+                            },
+                            deleteBackward: { document.deleteBackward() },
+                            insertText: { document.insertText($0) }
+                        )
+                        precondition(result != .invalidated, "Unexpected invalidation")
+                    }
+                    document.insertText(String(character))
+                }
+            }
+            await queue.waitUntilIdle()
+            precondition(document.text == expected, "Production document regression: \(input) -> \(document.text ?? "nil"), expected \(expected)")
+            print("PASS document input: \(input.debugDescription) -> \(expected.debugDescription)")
         }
-        print("PASS short-word rejection and pronoun timing")
+        await replay("For example jf i type in this sentence ", expected: "For example if I type in this sentence ")
+        await replay("so i think i'd like it ", expected: "so I think I'd like it ")
+        await replay("i’m sure i’ll say i’ve tried ", expected: "I’m sure I’ll say I’ve tried ")
+        await replay("i i'd i'm i'll i've ", expected: "I I'd I'm I'll I've ", spelling: false)
+        await replay("(i), 'i' i! i? i; i: i. i\n", expected: "(I), 'I' I! I? I; I: I. I\n", spelling: false)
+        await replay("in if is id ill iPhone item_i /i @i example.i ",
+                     expected: "in if is id ill iPhone item_i /i @i example.i ", spelling: false)
+        await replay("i i'd ", expected: "i i'd ", spelling: false, capitalization: .none)
+        await replay("i i'd ", expected: "i i'd ", field: .email)
+        await replay("i i'd ", expected: "i i'd ", language: "de-DE")
+        await replay("i", expected: "i") // no premature correction before a delimiter
+        await replay("i'd", expected: "i'd")
+
+        // Async spelling must not edit a switched field; deterministic case
+        // repair must not call the spelling service at all.
+        document.text = "i"
+        let capitalized = await KeyboardWordBoundaryEditor.correctCompletedWord(
+            context: { (document.text, "") }, documentID: { "test" }, fieldKind: .text,
+            capitalization: .sentences, autocorrectionEnabled: false, language: "en-US",
+            isRejected: { _ in true }, lookup: { _, _ in fatalError("Capitalization waited for spelling") },
+            deleteBackward: { document.deleteBackward() }, insertText: { document.insertText($0) }
+        )
+        precondition(capitalized == .ready(.init(original: "i", replacement: "I")))
+        // The UI's undo restores only this occurrence, with its delimiter.
+        document.deleteBackward()
+        document.insertText("i ")
+        precondition(document.text == "i ")
+        document.text = "teh"
+        let invalidated = await KeyboardWordBoundaryEditor.correctCompletedWord(
+            context: { (document.text, "") }, documentID: { "test" }, fieldKind: .text,
+            capitalization: .sentences, autocorrectionEnabled: true, language: "en-US",
+            isRejected: { _ in false }, lookup: { _, _ in
+                document.text = "another field"
+                return [KeyboardCorrection(text: "the", automaticallyReplaces: true)]
+            }, deleteBackward: { document.deleteBackward() }, insertText: { document.insertText($0) }
+        )
+        precondition(invalidated == .invalidated && document.text == "another field")
+        await engine.recordRejected(original: "jf", replacement: "if")
+        let rejectedShort = await engine.corrections(for: "jf", contextBefore: "jf", language: "en-US", evidence: [], includeCompletions: false)
+        precondition(!rejectedShort.contains(where: \.automaticallyReplaces), "Spelling undo ignored")
+        print("PASS capitalization with personal lexicon, persisted rejections, host traits, quotes, and async field changes")
         print("All iOS keyboard integration checks passed.")
     }
 }

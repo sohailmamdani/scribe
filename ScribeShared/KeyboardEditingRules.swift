@@ -34,6 +34,45 @@ nonisolated enum KeyboardShiftState: Equatable, Sendable {
 }
 
 nonisolated enum KeyboardEditingRules {
+    struct WordReplacement: Equatable, Sendable {
+        let original: String
+        let replacement: String
+    }
+
+    /// Case repair is deterministic and must not depend on spelling guesses,
+    /// contact names, or a previously rejected spelling correction.
+    nonisolated static func capitalizedEnglishPronoun(_ word: String) -> String? {
+        let core = word.trimmingCharacters(in: CharacterSet(charactersIn: "'’"))
+        let normalized = core.replacingOccurrences(of: "’", with: "'")
+        guard ["i", "i'm", "i'd", "i'll", "i've", "i'd've", "i'll've"].contains(normalized),
+              let index = word.firstIndex(of: "i") else { return nil }
+        var result = word
+        result.replaceSubrange(index...index, with: "I")
+        return result
+    }
+
+    static func pronounCapitalization(
+        contextBefore: String?,
+        fieldKind: KeyboardFieldKind,
+        capitalization: KeyboardCapitalizationMode,
+        autocorrectionEnabled: Bool,
+        language: String
+    ) -> WordReplacement? {
+        guard language.lowercased().hasPrefix("en"),
+              fieldKind.supportsAutocorrection,
+              capitalization != .none || autocorrectionEnabled,
+              let contextBefore else { return nil }
+        let word = String(contextBefore.reversed().prefix {
+            $0.isLetter || $0 == "'" || $0 == "’"
+        }.reversed())
+        guard let replacement = capitalizedEnglishPronoun(word) else { return nil }
+        if let preceding = contextBefore.dropLast(word.count).last,
+           preceding.isLetter || preceding.isNumber || "@_./-".contains(preceding) {
+            return nil
+        }
+        return WordReplacement(original: word, replacement: replacement)
+    }
+
     nonisolated static let rejectedAutocorrectionWordsKey =
         "keyboard.autocorrect.rejectedWords.v2"
 
@@ -106,6 +145,10 @@ nonisolated enum KeyboardEditingRules {
 
     static let doubleSpaceInterval: TimeInterval = 0.55
 
+    static func isWordBoundary(_ character: Character) -> Bool {
+        character.isWhitespace || ".,!?;:)]}\"”".contains(character)
+    }
+
     static func shouldConvertDoubleSpace(
         contextBefore: String?,
         elapsedSincePreviousSpace: TimeInterval?,
@@ -171,7 +214,8 @@ nonisolated enum KeyboardEditingRules {
         }
         // Only admit the standalone English pronoun, not a suffix of an
         // identifier, address, or path such as `item_i`, `1i`, or `/i`.
-        if word == "i", let preceding = contextBefore.dropLast().last,
+        if capitalizedEnglishPronoun(word) != nil,
+           let preceding = contextBefore.dropLast(word.count).last,
            preceding.isLetter || preceding.isNumber || "@_./-".contains(preceding) {
             return nil
         }
@@ -203,16 +247,13 @@ nonisolated enum KeyboardEditingRules {
               !trimmed.contains(where: \Character.isWhitespace),
               isWordSafeCorrectionCandidate(trimmed),
               trimmed.caseInsensitiveCompare(original) != .orderedSame
-                || (original == "i" && trimmed == "I") else {
+                || capitalizedEnglishPronoun(original) == trimmed else {
             return nil
         }
 
         // The pronoun I remains capitalized even when the user entered a
         // lowercase missing-apostrophe form such as `im` or `ive`.
-        if trimmed == "I" { return "I" }
-        if trimmed.lowercased().hasPrefix("i'") {
-            return "I" + trimmed.dropFirst().lowercased()
-        }
+        if let capitalized = capitalizedEnglishPronoun(trimmed.lowercased()) { return capitalized }
         if original == original.lowercased() {
             return trimmed.lowercased()
         }

@@ -188,6 +188,56 @@ final class KeyboardEditingRulesTests: XCTestCase {
         )
     }
 
+    func testPronounCapitalizationIncludesContractionsAndQuotes() {
+        for (input, expected) in [
+            ("i", "I"), ("i'd", "I'd"), ("i’d", "I’d"),
+            ("i'm", "I'm"), ("i’m", "I’m"), ("i'll", "I'll"),
+            ("i’ve", "I’ve"), ("i'd've", "I'd've"),
+            ("'i'", "'I'"), ("’i’", "’I’")
+        ] {
+            let edit = KeyboardEditingRules.pronounCapitalization(
+                contextBefore: "then " + input, fieldKind: .text,
+                capitalization: .sentences, autocorrectionEnabled: false, language: "en-US"
+            )
+            XCTAssertEqual(edit?.original, input)
+            XCTAssertEqual(edit?.replacement, expected)
+            XCTAssertEqual(KeyboardEditingRules.replacement(expected, matchingCapitalizationOf: input), expected)
+        }
+        for input in ["in", "if", "is", "id", "ill", "iPhone", "I", "I'd", "i'D", "item_i", "@i", "/i", "example.i", "1i", "item_i'd"] {
+            XCTAssertNil(KeyboardEditingRules.pronounCapitalization(
+                contextBefore: input, fieldKind: .text, capitalization: .sentences,
+                autocorrectionEnabled: true, language: "en-US"
+            ), input)
+        }
+    }
+
+    func testPronounCapitalizationHonorsIndependentHostTraits() {
+        for kind in [KeyboardFieldKind.URL, .email, .number, .phone] {
+            XCTAssertNil(KeyboardEditingRules.pronounCapitalization(
+                contextBefore: "i'd", fieldKind: kind, capitalization: .sentences,
+                autocorrectionEnabled: true, language: "en-US"
+            ))
+        }
+        XCTAssertNil(KeyboardEditingRules.pronounCapitalization(
+            contextBefore: "i", fieldKind: .text, capitalization: .none,
+            autocorrectionEnabled: false, language: "en-US"
+        ))
+        XCTAssertNil(KeyboardEditingRules.pronounCapitalization(
+            contextBefore: "i", fieldKind: .text, capitalization: .sentences,
+            autocorrectionEnabled: true, language: "de-DE"
+        ))
+        XCTAssertEqual(KeyboardEditingRules.pronounCapitalization(
+            contextBefore: "i", fieldKind: .text, capitalization: .none,
+            autocorrectionEnabled: true, language: "en-US"
+        )?.replacement, "I")
+        for character in " .,!?;:)\"]}\n" {
+            XCTAssertTrue(KeyboardEditingRules.isWordBoundary(character))
+        }
+        for character in "i'd’i-_/" {
+            XCTAssertFalse(KeyboardEditingRules.isWordBoundary(character))
+        }
+    }
+
     func testPreferredContractionsRestoreApostrophes() {
         let expected = [
             "dont": "don't",
