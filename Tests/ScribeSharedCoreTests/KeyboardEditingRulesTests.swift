@@ -266,6 +266,22 @@ final class KeyboardEditingRulesTests: XCTestCase {
         }
     }
 
+    func testMissingApostropheIdUsesSentenceAndClauseContext() {
+        for context in ["id", "Id", "  id", "Hello. id", "Done! Id", "then\nid",
+                        "I thought id", "so id", "if id", "maybe id", "I wish id"] {
+            let word = context.hasSuffix("Id") ? "Id" : "id"
+            XCTAssertTrue(KeyboardEditingRules.shouldRestoreIdContraction(for: word, contextBefore: context), context)
+        }
+        for context in ["user id", "my id", "your id", "an id", "the id", "account id",
+                        "photo id", "Apple id", "transaction id", "find id", "id id",
+                        "field: id", "user_id", "@id", "example.id", "/id", "1id", "ID"] {
+            let word = context == "ID" ? "ID" : "id"
+            XCTAssertFalse(KeyboardEditingRules.shouldRestoreIdContraction(for: word, contextBefore: context), context)
+        }
+        XCTAssertFalse(KeyboardEditingRules.shouldRestoreIdContraction(for: "id", contextBefore: nil))
+        XCTAssertEqual(KeyboardEditingRules.replacement("I'd", matchingCapitalizationOf: "id"), "I'd")
+    }
+
     func testRejectedAutocorrectionWordsUseThePersistedEngineKey() {
         let suiteName = "KeyboardEditingRulesTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

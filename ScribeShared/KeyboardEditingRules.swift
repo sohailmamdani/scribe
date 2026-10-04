@@ -134,6 +134,28 @@ nonisolated enum KeyboardEditingRules {
         preferredContractions[word.lowercased()]
     }
 
+    /// `id` is also a noun. Restore its apostrophe at the start of a sentence
+    /// or after a clause cue; elsewhere the engine can offer an explicit tap.
+    static func shouldRestoreIdContraction(for word: String, contextBefore: String?) -> Bool {
+        guard word == "id" || word == "Id",
+              let contextBefore, contextBefore.hasSuffix(word),
+              autocorrectionWord(contextBefore: contextBefore, fieldKind: .text,
+                                 autocorrectionEnabled: true) == word else { return false }
+        let prefix = contextBefore.dropLast(word.count)
+        // Trim horizontal spacing only: a newline starts a new sentence.
+        let preceding = prefix.reversed().first { $0 != " " && $0 != "\t" }
+        if preceding == nil || preceding.map({ ".!?;\n\r".contains($0) }) == true { return true }
+        guard let previous = wordBeforeAutocorrectionWord(contextBefore: contextBefore)?.lowercased()
+        else { return false }
+        return [
+            "if", "and", "but", "so", "then", "that", "because", "though", "although",
+            "unless", "whether", "when", "before", "after", "otherwise", "instead",
+            "maybe", "perhaps", "personally", "honestly", "probably", "usually",
+            "think", "thought", "wish", "wished", "hope", "hoped", "guess", "guessed",
+            "figured", "said", "say", "knew", "know", "expected", "assumed", "decided"
+        ].contains(previous)
+    }
+
     nonisolated static func isRejectedAutocorrectionWord(
         _ word: String,
         defaults: UserDefaults = .standard
@@ -214,7 +236,7 @@ nonisolated enum KeyboardEditingRules {
         }
         // Only admit the standalone English pronoun, not a suffix of an
         // identifier, address, or path such as `item_i`, `1i`, or `/i`.
-        if capitalizedEnglishPronoun(word) != nil,
+        if capitalizedEnglishPronoun(word) != nil || word.lowercased() == "id",
            let preceding = contextBefore.dropLast(word.count).last,
            preceding.isLetter || preceding.isNumber || "@_./-".contains(preceding) {
             return nil

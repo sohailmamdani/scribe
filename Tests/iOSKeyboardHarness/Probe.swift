@@ -29,7 +29,8 @@ struct KeyboardIntegrationProbe {
             ("in te", "the"), ("dont", "don't"), ("thw", "the"), ("thst", "that"),
             ("For example jf", "if"), ("jf", "if"), ("if i", "I"),
             ("think i'd", "I'd"), ("think i’d", "I’d"), ("think i'm", "I'm"),
-            ("think i’m", "I’m"), ("think i'll", "I'll"), ("think i’ve", "I’ve")
+            ("think i’m", "I’m"), ("think i'll", "I'll"), ("think i’ve", "I’ve"),
+            ("id", "I'd"), ("Id", "I'd"), ("I thought id", "I'd"), ("so id", "I'd")
         ] {
             let word = String(context.split(separator: " ").last!)
             let start = ProcessInfo.processInfo.systemUptime
@@ -41,7 +42,7 @@ struct KeyboardIntegrationProbe {
             print("PASS \(context) -> \(expected) (\(Int((ProcessInfo.processInfo.systemUptime - start) * 1000)) ms)")
         }
 
-        for context in ["hello", "a fir", "looking fir", "form", "well", "its", "as if", "an id", "if in is"] {
+        for context in ["hello", "a fir", "looking fir", "form", "well", "its", "as if", "an id", "user id", "my id", "account id", "photo id", "Apple ID", "if in is"] {
             let word = String(context.split(separator: " ").last!)
             let result = await engine.corrections(
                 for: word, contextBefore: context, language: "en-US", evidence: [], includeCompletions: false
@@ -186,6 +187,17 @@ struct KeyboardIntegrationProbe {
         }
         await replay("For example jf i type in this sentence ", expected: "For example if I type in this sentence ")
         await replay("so i think i'd like it ", expected: "so I think I'd like it ")
+        await replay("id ", expected: "I'd ")
+        await replay("Id like to try it ", expected: "I'd like to try it ")
+        await replay("so i thought id like it ", expected: "so I thought I'd like it ")
+        await replay("my id is here ", expected: "my id is here ")
+        await replay("user id ", expected: "user id ")
+        await replay("ID number ", expected: "ID number ")
+        await replay("user_id ", expected: "user_id ")
+        await replay("id ", expected: "id ", spelling: false)
+        await replay("id ", expected: "id ", field: .email)
+        await replay("id ", expected: "id ", language: "de-DE")
+        await replay("id", expected: "id")
         await replay("i’m sure i’ll say i’ve tried ", expected: "I’m sure I’ll say I’ve tried ")
         await replay("i i'd i'm i'll i've ", expected: "I I'd I'm I'll I've ", spelling: false)
         await replay("(i), 'i' i! i? i; i: i. i\n", expected: "(I), 'I' I! I? I; I: I. I\n", spelling: false)
@@ -225,6 +237,18 @@ struct KeyboardIntegrationProbe {
         let rejectedShort = await engine.corrections(for: "jf", contextBefore: "jf", language: "en-US", evidence: [], includeCompletions: false)
         precondition(!rejectedShort.contains(where: \.automaticallyReplaces), "Spelling undo ignored")
         print("PASS capitalization with personal lexicon, persisted rejections, host traits, quotes, and async field changes")
+        let partialId = await engine.corrections(for: "id", contextBefore: "id", language: "en-US", evidence: [])
+        precondition(partialId.first?.text == "I'd" && !partialId.contains(where: \.automaticallyReplaces))
+        await engine.recordRejected(original: "id", replacement: "I'd")
+        let rejectedId = await engine.corrections(for: "id", contextBefore: "id", language: "en-US", evidence: [], includeCompletions: false)
+        precondition(rejectedId.isEmpty, "Missing-apostrophe undo ignored")
+        let reloadedEngine = KeyboardAutocorrectionEngine(words: words, bigrams: bigrams, defaults: defaults)
+        let reloadedId = await reloadedEngine.corrections(for: "id", contextBefore: "id", language: "en-US", evidence: [], includeCompletions: false)
+        precondition(reloadedId.isEmpty, "Missing-apostrophe rejection did not persist")
+        await persistedEngine.updateSupplementaryLexicon(entries: [.init(userInput: "id", documentText: "ID")])
+        let dictionaryId = await persistedEngine.corrections(for: "id", contextBefore: "id", language: "en-US", evidence: [], includeCompletions: false)
+        precondition(dictionaryId.isEmpty, "ID dictionary preference ignored")
+        print("PASS missing-apostrophe id context, timing, dictionary preference, and persisted undo")
         print("All iOS keyboard integration checks passed.")
     }
 }

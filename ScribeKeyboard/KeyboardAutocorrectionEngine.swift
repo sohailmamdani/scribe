@@ -169,6 +169,17 @@ actor KeyboardAutocorrectionEngine {
                 text: capitalized, automaticallyReplaces: !includeCompletions
             )]
         }
+        if original == "id" {
+            guard !isProtected, word != "ID",
+                  KeyboardEditingRules.autocorrectionWord(
+                    contextBefore: contextBefore, fieldKind: .text, autocorrectionEnabled: true
+                  ) == word else { return [] }
+            return [KeyboardCorrection(
+                text: "I'd",
+                automaticallyReplaces: !includeCompletions
+                    && KeyboardEditingRules.shouldRestoreIdContraction(for: word, contextBefore: contextBefore)
+            )]
+        }
         guard original.count >= 2 else { return [] }
         let lexicon = await loadedLexicon()
         guard !Task.isCancelled else { return [] }
