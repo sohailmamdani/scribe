@@ -37,6 +37,8 @@ nonisolated enum KeyboardEditingRules {
     struct WordReplacement: Equatable, Sendable {
         let original: String
         let replacement: String
+        var rejectionOriginal: String? = nil
+        var rejectionReplacement: String? = nil
     }
 
     /// Case repair is deterministic and must not depend on spelling guesses,
@@ -152,8 +154,47 @@ nonisolated enum KeyboardEditingRules {
             "unless", "whether", "when", "before", "after", "otherwise", "instead",
             "maybe", "perhaps", "personally", "honestly", "probably", "usually",
             "think", "thought", "wish", "wished", "hope", "hoped", "guess", "guessed",
-            "figured", "said", "say", "knew", "know", "expected", "assumed", "decided"
+            "figured", "said", "say", "knew", "know", "expected", "assumed", "decided",
+            "today", "tomorrow", "tonight", "later", "well", "okay", "ok", "yes", "sure", "anyway"
         ].contains(previous)
+    }
+
+    /// A following verb can disambiguate a contraction that was left alone at
+    /// its first Space. In particular, `ill` needs this evidence because it is
+    /// an ordinary adjective in `ill health` and `feel ill`.
+    static func shouldRestoreContraction(
+        for word: String, contextBefore: String?, followingWord: String?
+    ) -> Bool {
+        let original = word.lowercased()
+        guard ["id", "ill"].contains(original), word != word.uppercased(),
+              autocorrectionWord(contextBefore: contextBefore, fieldKind: .text,
+                                 autocorrectionEnabled: true) == word else { return false }
+        guard let followingWord else {
+            return original == "id" && shouldRestoreIdContraction(for: word, contextBefore: contextBefore)
+        }
+        let previous = wordBeforeAutocorrectionWord(contextBefore: contextBefore)?.lowercased() ?? ""
+        let nounCues: Set<String> = original == "id"
+            ? ["a", "an", "the", "my", "your", "his", "her", "our", "their", "this", "that",
+               "user", "account", "photo", "apple", "transaction", "valid", "government", "some"]
+            : ["am", "is", "are", "was", "were", "feel", "feels", "feeling", "felt", "become",
+               "became", "been", "being", "very", "seriously", "still", "mentally", "terminally",
+               "quite", "too", "really", "severely", "chronically", "gravely"]
+        guard !nounCues.contains(previous) else { return false }
+        let following = followingWord.lowercased()
+        let verbCues: Set<String> = [
+            "be", "have", "do", "go", "call", "come", "get", "send", "try", "see", "take",
+            "make", "let", "need", "want", "like", "love", "prefer", "appreciate", "say",
+            "tell", "ask", "give", "bring", "leave", "help", "meet", "start", "finish",
+            "keep", "wait", "work", "look", "find", "use", "buy", "pay", "read", "write",
+            "think", "check", "put", "pick", "run", "walk", "talk", "join", "return", "stay",
+            "not", "never", "just", "probably", "definitely", "also", "always", "only"
+        ]
+        if original == "id" {
+            // An ID check is a noun phrase; I'd rather / I'd been are contractions.
+            if following == "check" { return false }
+            if ["rather", "been", "already"].contains(following) { return true }
+        }
+        return verbCues.contains(following)
     }
 
     nonisolated static func isRejectedAutocorrectionWord(
@@ -236,7 +277,7 @@ nonisolated enum KeyboardEditingRules {
         }
         // Only admit the standalone English pronoun, not a suffix of an
         // identifier, address, or path such as `item_i`, `1i`, or `/i`.
-        if capitalizedEnglishPronoun(word) != nil || word.lowercased() == "id",
+        if capitalizedEnglishPronoun(word) != nil || ["id", "ill"].contains(word.lowercased()),
            let preceding = contextBefore.dropLast(word.count).last,
            preceding.isLetter || preceding.isNumber || "@_./-".contains(preceding) {
             return nil

@@ -169,9 +169,9 @@ struct KeyboardIntegrationProbe {
                             fieldKind: field, capitalization: capitalization,
                             autocorrectionEnabled: spelling, language: language,
                             isRejected: { KeyboardEditingRules.isRejectedAutocorrectionWord($0, defaults: defaults) },
-                            lookup: { word, before in
+                            lookup: { word, before, following in
                                 await persistedEngine.corrections(for: word, contextBefore: before,
-                                    language: language, evidence: [], includeCompletions: false)
+                                    language: language, evidence: [], includeCompletions: false, followingWord: following)
                             },
                             deleteBackward: { document.deleteBackward() },
                             insertText: { document.insertText($0) }
@@ -209,13 +209,65 @@ struct KeyboardIntegrationProbe {
         await replay("i", expected: "i") // no premature correction before a delimiter
         await replay("i'd", expected: "i'd")
 
+        let contractionSentences = [
+            ("ill call you ", "I'll call you "),
+            ("Ill be there ", "I'll be there "),
+            ("tomorrow ill go ", "tomorrow I'll go "),
+            ("so ill try again ", "so I'll try again "),
+            ("later ill send it ", "later I'll send it "),
+            ("ill have it ", "I'll have it "),
+            ("ill just wait ", "I'll just wait "),
+            ("sometimes id like to go ", "sometimes I'd like to go "),
+            ("today id like to go ", "today I'd like to go "),
+            ("well id rather wait ", "well I'd rather wait "),
+            ("im here ", "I'm here "),
+            ("ive been there ", "I've been there "),
+            ("i'd like that ", "I'd like that "),
+            ("i’ll call you ", "I’ll call you "),
+            ("ill health ", "ill health "),
+            ("ill effects ", "ill effects "),
+            ("ill will ", "ill will "),
+            ("feel ill today ", "feel ill today "),
+            ("very ill today ", "very ill today "),
+            ("my id is here ", "my id is here "),
+            ("user id check ", "user id check "),
+            ("ID card ", "ID card "),
+            ("user_ill call ", "user_ill call ")
+        ]
+        for (input, expected) in contractionSentences {
+            await replay(input, expected: expected)
+        }
+        await replay("ill call ", expected: "ill call ", spelling: false)
+        await replay("ill call ", expected: "ill call ", field: .email)
+        await replay("ill call ", expected: "ill call ", language: "de-DE")
+        await replay("ill cal", expected: "ill cal")
+
+        document.text = "ill call"
+        let phraseEdit = await KeyboardWordBoundaryEditor.correctCompletedWord(
+            context: { (document.text, "") }, documentID: { "phrase-test" }, fieldKind: .text,
+            capitalization: .sentences, autocorrectionEnabled: true, language: "en-US",
+            isRejected: { _ in false }, lookup: { word, before, following in
+                await persistedEngine.corrections(for: word, contextBefore: before, language: "en-US",
+                    evidence: [], includeCompletions: false, followingWord: following)
+            }, deleteBackward: { document.deleteBackward() }, insertText: { document.insertText($0) }
+        )
+        guard case .ready(let edit?) = phraseEdit else { fatalError("Missing phrase correction") }
+        precondition(document.text == "I'll call" && edit.original == "ill call")
+        precondition(edit.rejectionOriginal == "ill" && edit.rejectionReplacement == "I'll")
+        for _ in edit.replacement { document.deleteBackward() }
+        document.insertText(edit.original + " ")
+        await persistedEngine.recordRejected(original: edit.rejectionOriginal!, replacement: edit.rejectionReplacement!)
+        await replay("ill call ", expected: "ill call ")
+        precondition(document.text == "ill call ", "Phrase undo failed")
+        print("PASS contraction sentence pairs, host exclusions, timing, and phrase undo")
+
         // Async spelling must not edit a switched field; deterministic case
         // repair must not call the spelling service at all.
         document.text = "i"
         let capitalized = await KeyboardWordBoundaryEditor.correctCompletedWord(
             context: { (document.text, "") }, documentID: { "test" }, fieldKind: .text,
             capitalization: .sentences, autocorrectionEnabled: false, language: "en-US",
-            isRejected: { _ in true }, lookup: { _, _ in fatalError("Capitalization waited for spelling") },
+            isRejected: { _ in true }, lookup: { _, _, _ in fatalError("Capitalization waited for spelling") },
             deleteBackward: { document.deleteBackward() }, insertText: { document.insertText($0) }
         )
         precondition(capitalized == .ready(.init(original: "i", replacement: "I")))
@@ -227,12 +279,25 @@ struct KeyboardIntegrationProbe {
         let invalidated = await KeyboardWordBoundaryEditor.correctCompletedWord(
             context: { (document.text, "") }, documentID: { "test" }, fieldKind: .text,
             capitalization: .sentences, autocorrectionEnabled: true, language: "en-US",
-            isRejected: { _ in false }, lookup: { _, _ in
+            isRejected: { _ in false }, lookup: { _, _, _ in
                 document.text = "another field"
                 return [KeyboardCorrection(text: "the", automaticallyReplaces: true)]
             }, deleteBackward: { document.deleteBackward() }, insertText: { document.insertText($0) }
         )
         precondition(invalidated == .invalidated && document.text == "another field")
+        document.text = "ill call"
+        var phraseDocumentID = "original"
+        let phraseInvalidated = await KeyboardWordBoundaryEditor.correctCompletedWord(
+            context: { (document.text, "") }, documentID: { phraseDocumentID }, fieldKind: .text,
+            capitalization: .sentences, autocorrectionEnabled: true, language: "en-US",
+            isRejected: { _ in false }, lookup: { _, _, following in
+                guard following != nil else { return [] }
+                // A second field can have exactly the same text as the first.
+                phraseDocumentID = "different"
+                return [KeyboardCorrection(text: "I'll", automaticallyReplaces: true)]
+            }, deleteBackward: { document.deleteBackward() }, insertText: { document.insertText($0) }
+        )
+        precondition(phraseInvalidated == .invalidated && document.text == "ill call")
         await engine.recordRejected(original: "jf", replacement: "if")
         let rejectedShort = await engine.corrections(for: "jf", contextBefore: "jf", language: "en-US", evidence: [], includeCompletions: false)
         precondition(!rejectedShort.contains(where: \.automaticallyReplaces), "Spelling undo ignored")

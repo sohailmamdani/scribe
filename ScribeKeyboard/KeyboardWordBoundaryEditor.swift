@@ -17,7 +17,7 @@ enum KeyboardWordBoundaryEditor {
         autocorrectionEnabled: Bool,
         language: String,
         isRejected: (String) -> Bool,
-        lookup: (String, String?) async -> [KeyboardCorrection],
+        lookup: (String, String?, String?) async -> [KeyboardCorrection],
         deleteBackward: () -> Void,
         insertText: (String) -> Void
     ) async -> Result {
@@ -29,11 +29,12 @@ enum KeyboardWordBoundaryEditor {
             capitalization: capitalization, autocorrectionEnabled: autocorrectionEnabled,
             language: language
         )
-        if edit == nil, let word = KeyboardEditingRules.autocorrectionWord(
+        let word = KeyboardEditingRules.autocorrectionWord(
             contextBefore: before.0, fieldKind: fieldKind,
             autocorrectionEnabled: autocorrectionEnabled
-        ), !isRejected(word.lowercased()) {
-            let suggestions = await lookup(word, before.0)
+        )
+        if edit == nil, let word, !isRejected(word.lowercased()) {
+            let suggestions = await lookup(word, before.0, nil)
             guard !Task.isCancelled else { return .invalidated }
             let after = context()
             guard before.0 == after.0, before.1 == after.1, id == documentID() else {
@@ -44,6 +45,38 @@ enum KeyboardWordBoundaryEditor {
                 suggestion.text, matchingCapitalizationOf: word
                ) {
                 edit = .init(original: word, replacement: replacement)
+            }
+        }
+        // Revisit the preceding ambiguous token only once the next word is
+        // complete. The queue keeps following keystrokes behind this lookup.
+        if let word, let text = before.0 {
+            let prefix = String(text.dropLast(word.count))
+            if prefix.last == " " {
+                let previousContext = String(prefix.dropLast())
+                if let previous = KeyboardEditingRules.autocorrectionWord(
+                    contextBefore: previousContext, fieldKind: fieldKind,
+                    autocorrectionEnabled: autocorrectionEnabled
+                ), ["id", "ill"].contains(previous.lowercased()),
+                   !isRejected(previous.lowercased()) {
+                    let following = edit?.replacement ?? word
+                    let suggestions = await lookup(previous, previousContext, following)
+                    guard !Task.isCancelled else { return .invalidated }
+                    let after = context()
+                    guard before.0 == after.0, before.1 == after.1, id == documentID() else {
+                        return .invalidated
+                    }
+                    if let suggestion = suggestions.first(where: \.automaticallyReplaces),
+                       let replacement = KeyboardEditingRules.replacement(
+                        suggestion.text, matchingCapitalizationOf: previous
+                       ) {
+                        edit = .init(
+                            original: previous + " " + word,
+                            replacement: replacement + " " + following,
+                            rejectionOriginal: previous,
+                            rejectionReplacement: replacement
+                        )
+                    }
+                }
             }
         }
         if let edit {

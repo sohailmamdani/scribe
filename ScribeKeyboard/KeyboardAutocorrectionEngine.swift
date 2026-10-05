@@ -156,7 +156,8 @@ actor KeyboardAutocorrectionEngine {
         contextBefore: String?,
         language: String,
         evidence: [KeyboardTapEvidence],
-        includeCompletions: Bool = true
+        includeCompletions: Bool = true,
+        followingWord: String? = nil
     ) async -> [KeyboardCorrection] {
         let original = word.lowercased()
         guard language.lowercased().hasPrefix("en"), !Task.isCancelled else { return [] }
@@ -169,15 +170,17 @@ actor KeyboardAutocorrectionEngine {
                 text: capitalized, automaticallyReplaces: !includeCompletions
             )]
         }
-        if original == "id" {
-            guard !isProtected, word != "ID",
+        if original == "id" || original == "ill" {
+            guard !isProtected, word != word.uppercased(),
                   KeyboardEditingRules.autocorrectionWord(
                     contextBefore: contextBefore, fieldKind: .text, autocorrectionEnabled: true
                   ) == word else { return [] }
             return [KeyboardCorrection(
-                text: "I'd",
+                text: original == "id" ? "I'd" : "I'll",
                 automaticallyReplaces: !includeCompletions
-                    && KeyboardEditingRules.shouldRestoreIdContraction(for: word, contextBefore: contextBefore)
+                    && KeyboardEditingRules.shouldRestoreContraction(
+                        for: word, contextBefore: contextBefore, followingWord: followingWord
+                    )
             )]
         }
         guard original.count >= 2 else { return [] }

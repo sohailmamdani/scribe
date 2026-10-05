@@ -78,7 +78,7 @@ final class KeyboardViewController: UIInputViewController {
             inputLanguage: { [weak self] in
                 self?.textDocumentProxy.documentInputMode?.primaryLanguage ?? "en-US"
             },
-            correctionsForWord: { [weak self] word, contextBefore, evidence, includeCompletions in
+            correctionsForWord: { [weak self] word, contextBefore, evidence, includeCompletions, followingWord in
                 guard let self else { return [] }
                 let language = await MainActor.run {
                     self.textDocumentProxy.documentInputMode?.primaryLanguage ?? "en-US"
@@ -88,7 +88,8 @@ final class KeyboardViewController: UIInputViewController {
                     contextBefore: contextBefore,
                     language: language,
                     evidence: evidence,
-                    includeCompletions: includeCompletions
+                    includeCompletions: includeCompletions,
+                    followingWord: followingWord
                 )
             },
             recordAcceptedCorrection: { [weak self] original, replacement in

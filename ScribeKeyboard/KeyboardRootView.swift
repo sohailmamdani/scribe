@@ -25,7 +25,7 @@ struct KeyboardRootView: View {
     let capitalizationMode: () -> KeyboardCapitalizationMode
     let autocorrectionEnabled: () -> Bool
     let inputLanguage: () -> String
-    let correctionsForWord: (String, String?, [KeyboardTapEvidence], Bool) async -> [KeyboardCorrection]
+    let correctionsForWord: (String, String?, [KeyboardTapEvidence], Bool, String?) async -> [KeyboardCorrection]
     let recordAcceptedCorrection: (String, String) -> Void
     let recordRejectedCorrection: (String, String) -> Void
     let openContainingApp: (URL, @escaping (Bool) -> Void) -> Void
@@ -106,6 +106,8 @@ struct KeyboardRootView: View {
         let original: String
         let replacement: String
         let suffix: String
+        var rejectionOriginal: String? = nil
+        var rejectionReplacement: String? = nil
     }
 
     private var usesCompactMetrics: Bool { verticalSizeClass == .compact }
@@ -1380,8 +1382,8 @@ struct KeyboardRootView: View {
                 sessionRejectedAutocorrectionWords.contains($0)
                     || KeyboardEditingRules.isRejectedAutocorrectionWord($0)
             },
-            lookup: { word, before in
-                await correctionsForWord(word, before, evidence(matching: word), false)
+            lookup: { word, before, following in
+                await correctionsForWord(word, before, evidence(matching: word), false, following)
             },
             deleteBackward: proxyDeleteBackward,
             insertText: proxyInsertText
@@ -1404,7 +1406,9 @@ struct KeyboardRootView: View {
             appliedCorrection = AppliedCorrection(
                 original: correction.original,
                 replacement: correction.replacement,
-                suffix: correction.replacement + delimiter
+                suffix: correction.replacement + delimiter,
+                rejectionOriginal: correction.rejectionOriginal,
+                rejectionReplacement: correction.rejectionReplacement
             )
         }
     }
@@ -1490,7 +1494,8 @@ struct KeyboardRootView: View {
             word,
             context().0,
             evidence(matching: word),
-            true
+            true,
+            nil
         )
         // The user keeps typing while this runs. Discard anything that no
         // longer describes the word actually in the field.
@@ -1572,10 +1577,11 @@ struct KeyboardRootView: View {
         for _ in appliedCorrection.suffix { proxyDeleteBackward() }
         let delimiter = String(appliedCorrection.suffix.dropFirst(appliedCorrection.replacement.count))
         proxyInsertText(appliedCorrection.original + delimiter)
-        if KeyboardEditingRules.capitalizedEnglishPronoun(appliedCorrection.original)
-            != appliedCorrection.replacement {
-            sessionRejectedAutocorrectionWords.insert(appliedCorrection.original.lowercased())
-            recordRejectedCorrection(appliedCorrection.original, appliedCorrection.replacement)
+        let rejectionOriginal = appliedCorrection.rejectionOriginal ?? appliedCorrection.original
+        let rejectionReplacement = appliedCorrection.rejectionReplacement ?? appliedCorrection.replacement
+        if KeyboardEditingRules.capitalizedEnglishPronoun(rejectionOriginal) != rejectionReplacement {
+            sessionRejectedAutocorrectionWords.insert(rejectionOriginal.lowercased())
+            recordRejectedCorrection(rejectionOriginal, rejectionReplacement)
         }
         self.appliedCorrection = nil
         tapEvidence = []

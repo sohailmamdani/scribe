@@ -282,6 +282,33 @@ final class KeyboardEditingRulesTests: XCTestCase {
         XCTAssertEqual(KeyboardEditingRules.replacement("I'd", matchingCapitalizationOf: "id"), "I'd")
     }
 
+    func testFollowingWordDisambiguatesContractions() {
+        for (context, following) in [
+            ("ill", "call"), ("Ill", "be"), ("tomorrow ill", "go"),
+            ("so ill", "try"), ("later ill", "send"), ("personally id", "rather"),
+            ("sometimes id", "like"), ("id", "have")
+        ] {
+            let word = String(context.split(separator: " ").last!)
+            XCTAssertTrue(KeyboardEditingRules.shouldRestoreContraction(
+                for: word, contextBefore: context, followingWord: following
+            ), context + " " + following)
+        }
+        for (context, following) in [
+            ("ill", "health"), ("ill", "effects"), ("ill", "will"),
+            ("feel ill", "today"), ("very ill", "be"), ("user id", "be"),
+            ("my id", "like"), ("id", "check"), ("ID", "have"),
+            ("user_ill", "call"), ("/ill", "go")
+        ] {
+            let word = String(context.split(separator: " ").last!)
+            XCTAssertFalse(KeyboardEditingRules.shouldRestoreContraction(
+                for: word, contextBefore: context, followingWord: following
+            ), context + " " + following)
+        }
+        XCTAssertFalse(KeyboardEditingRules.shouldRestoreContraction(
+            for: "ill", contextBefore: "ill", followingWord: nil
+        ))
+    }
+
     func testRejectedAutocorrectionWordsUseThePersistedEngineKey() {
         let suiteName = "KeyboardEditingRulesTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
