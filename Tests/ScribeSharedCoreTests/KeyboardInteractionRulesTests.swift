@@ -97,9 +97,8 @@ final class KeyboardInteractionRulesTests: XCTestCase {
 
         XCTAssertEqual(
             KeyboardPunctuationPalette.symbol(
-                atX: keyWidth - popupWidth + 20,
+                atX: 20,
                 y: -(popupHeight + gap) + 22,
-                anchorKeyWidth: keyWidth,
                 popupWidth: popupWidth,
                 popupHeight: popupHeight,
                 gap: gap
@@ -108,9 +107,8 @@ final class KeyboardInteractionRulesTests: XCTestCase {
         )
         XCTAssertEqual(
             KeyboardPunctuationPalette.symbol(
-                atX: keyWidth - 20,
+                atX: popupWidth - 20,
                 y: -gap - 22,
-                anchorKeyWidth: keyWidth,
                 popupWidth: popupWidth,
                 popupHeight: popupHeight,
                 gap: gap
@@ -121,12 +119,31 @@ final class KeyboardInteractionRulesTests: XCTestCase {
             KeyboardPunctuationPalette.symbol(
                 atX: keyWidth / 2,
                 y: keyWidth / 2,
-                anchorKeyWidth: keyWidth,
                 popupWidth: popupWidth,
                 popupHeight: popupHeight,
                 gap: gap
             )
         )
+    }
+
+    func testLeftAlignedPunctuationPaletteAtCompactAndWideSizes() {
+        for width in [200.0, 260.0, 320.0] {
+            for (rowIndex, row) in KeyboardPunctuationPalette.rows.enumerated() {
+                for (column, expected) in row.enumerated() {
+                    XCTAssertEqual(KeyboardPunctuationPalette.symbol(
+                        atX: (Double(column) + 0.5) * width / 8,
+                        y: -96 + (Double(rowIndex) + 0.5) * 44,
+                        popupWidth: width, popupHeight: 88, gap: 8
+                    ), expected)
+                }
+            }
+            for x in [-1.0, width + 1] {
+                XCTAssertNil(KeyboardPunctuationPalette.symbol(
+                    atX: x, y: -30,
+                    popupWidth: width, popupHeight: 88, gap: 8
+                ))
+            }
+        }
     }
 
     func testAllUSKeyboardAlternates() {

@@ -59,8 +59,8 @@ enum KeyboardSymbolLayouts {
 }
 
 /// Gboard's period key expands into two rows of punctuation. The popup is
-/// right-aligned with the period key, so hit resolution accepts coordinates in
-/// that key's local space even when the finger has travelled far to the left.
+/// left-aligned with the period key, so hit resolution accepts coordinates in
+/// that key's local space as the finger travels to the right.
 enum KeyboardPunctuationPalette {
     static let rows: [[Character]] = [
         Array("&%+\"-:'@"),
@@ -72,7 +72,6 @@ enum KeyboardPunctuationPalette {
     static func symbol(
         atX x: Double,
         y: Double,
-        anchorKeyWidth: Double,
         popupWidth: Double,
         popupHeight: Double,
         gap: Double
@@ -81,11 +80,11 @@ enum KeyboardPunctuationPalette {
               popupWidth > 0,
               popupHeight > 0 else { return nil }
 
-        let minX = anchorKeyWidth - popupWidth
+        let minX = 0.0
         let minY = -(popupHeight + gap)
         let maxY = -gap
         guard x >= minX,
-              x <= anchorKeyWidth,
+              x <= popupWidth,
               y >= minY,
               y <= maxY else { return nil }
 

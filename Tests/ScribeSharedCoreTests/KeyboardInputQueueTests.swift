@@ -3,6 +3,7 @@ import XCTest
 
 @MainActor
 final class KeyboardInputQueueTests: XCTestCase {
+    @MainActor
     private final class Gate {
         var continuation: CheckedContinuation<Void, Never>?
         func wait() async { await withCheckedContinuation { continuation = $0 } }

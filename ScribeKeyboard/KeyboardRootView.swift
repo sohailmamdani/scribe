@@ -440,7 +440,8 @@ struct KeyboardRootView: View {
             let returnWidth = CGFloat(widths.returnKey)
             let punctuationPopupWidth = min(
                 320,
-                availableWidth - returnWidth - horizontalGap
+                availableWidth - modeWidth - horizontalGap
+                    - (documentState.needsInputModeSwitchKey ? 45 + horizontalGap : 0)
             )
 
             HStack(spacing: horizontalGap) {
@@ -448,8 +449,8 @@ struct KeyboardRootView: View {
                     bottomKey(id: .globe, systemName: "globe", width: 45)
                 }
                 bottomKey(id: .mode, title: layout == .letters ? "123" : "ABC", width: modeWidth)
-                spaceKey
                 punctuationKey(width: punctuationWidth, popupWidth: punctuationPopupWidth)
+                spaceKey
                 bottomKey(id: .returnKey, systemName: "return", width: returnWidth)
             }
             .padding(.horizontal, outerInset)
@@ -674,11 +675,11 @@ struct KeyboardRootView: View {
             .shadow(color: .black.opacity(0.16), radius: 0, y: 1)
             .contentShape(Rectangle())
             .background(keyFrameReader(for: .punctuation))
-            .overlay(alignment: .bottomTrailing) {
+            .overlay(alignment: .bottomLeading) {
                 if punctuationPopupVisible {
                     punctuationPopup(width: popupWidth)
                         .offset(y: -(keyHeight + Self.punctuationPopupGap))
-                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomTrailing)))
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
                         .allowsHitTesting(false)
                 }
             }
@@ -741,7 +742,6 @@ struct KeyboardRootView: View {
 
     private func movePunctuationGesture(
         to point: CGPoint,
-        keyWidth: CGFloat,
         popupWidth: CGFloat
     ) {
         guard punctuationGestureIsActive,
@@ -749,7 +749,6 @@ struct KeyboardRootView: View {
         let selection = KeyboardPunctuationPalette.symbol(
             atX: Double(point.x),
             y: Double(point.y),
-            anchorKeyWidth: Double(keyWidth),
             popupWidth: Double(popupWidth),
             popupHeight: Double(punctuationPopupHeight),
             gap: Double(Self.punctuationPopupGap)
@@ -882,9 +881,9 @@ struct KeyboardRootView: View {
         if startKey == .punctuation, let frame = keyFrames[.punctuation] {
             movePunctuationGesture(
                 to: CGPoint(x: point.x - frame.minX, y: point.y - frame.minY),
-                keyWidth: frame.width,
                 popupWidth: min(320, keyAreaBounds.width - 2 * outerInset
-                    - (keyFrames[.returnKey]?.width ?? 80) - horizontalGap)
+                    - (keyFrames[.mode]?.width ?? 62) - horizontalGap
+                    - (documentState.needsInputModeSwitchKey ? 45 + horizontalGap : 0))
             )
             return
         }
