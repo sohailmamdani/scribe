@@ -7,6 +7,7 @@ final class KeyboardDocumentState: ObservableObject {
     @Published private(set) var selectionRevision = 0
     @Published private(set) var hasFullAccess = false
     @Published private(set) var needsInputModeSwitchKey = false
+    @Published private(set) var keyboardWidth: CGFloat = 440
     @Published private(set) var preferences: KeyboardPreferences
     private let preferencesStore: SharedKeyboardPreferencesStore
 
@@ -18,6 +19,11 @@ final class KeyboardDocumentState: ObservableObject {
 
     func textChanged() { textRevision &+= 1 }
     func selectionChanged() { selectionRevision &+= 1 }
+
+    func updateKeyboardWidth(_ width: CGFloat) {
+        guard width > 0, keyboardWidth != width else { return }
+        keyboardWidth = width
+    }
 
     func updateEnvironment(hasFullAccess: Bool, needsInputModeSwitchKey: Bool) {
         if self.hasFullAccess != hasFullAccess {
@@ -236,7 +242,9 @@ final class KeyboardViewController: UIInputViewController {
 
     private func updateKeyboardHeight() {
         let isCompact = traitCollection.verticalSizeClass == .compact
-        let geometry = isCompact ? KeyboardGeometryRules.compact : .portrait
+        documentState.updateKeyboardWidth(view.bounds.width)
+        let geometry = isCompact ? KeyboardGeometryRules.compact
+            : .portrait(totalWidth: Double(documentState.keyboardWidth))
         // Keep the complete toolbar + native four-row key-grid formula in
         // shared geometry so SwiftUI cannot compress rows into one another.
         let desiredHeight = CGFloat(geometry.extensionHeight)

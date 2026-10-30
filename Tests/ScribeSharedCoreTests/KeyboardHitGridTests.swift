@@ -179,12 +179,12 @@ final class KeyboardHitGridTests: XCTestCase {
         let widths = KeyboardBottomRowWidths.resolve(
             totalWidth: totalWidth, outerInset: geometry.outerInset,
             horizontalGap: geometry.horizontalGap, punctuationWidth: 46,
-            includesInputModeSwitchKey: false
+            includesInputModeSwitchKey: false, usesSystemProportions: true
         )
         let bottomY = 3 * (geometry.keyHeight + geometry.verticalGap)
         var x = geometry.outerInset
-        for (name, width) in [("mode", widths.mode), ("space", widths.space),
-                              ("period", 46.0), ("return", widths.returnKey)] {
+        for (name, width) in [("mode", widths.mode), ("period", widths.punctuation),
+                              ("space", widths.space), ("return", widths.returnKey)] {
             frames[name] = CGRect(x: x, y: bottomY, width: width, height: geometry.keyHeight)
             x += width + geometry.horizontalGap
         }

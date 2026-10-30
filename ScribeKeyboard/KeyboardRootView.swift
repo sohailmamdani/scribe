@@ -112,7 +112,8 @@ struct KeyboardRootView: View {
 
     private var usesCompactMetrics: Bool { verticalSizeClass == .compact }
     private var geometry: KeyboardGeometryRules {
-        usesCompactMetrics ? .compact : .portrait
+        usesCompactMetrics ? .compact
+            : .portrait(totalWidth: Double(documentState.keyboardWidth))
     }
     private var horizontalGap: CGFloat { geometry.horizontalGap }
     private var verticalGap: CGFloat { geometry.verticalGap }
@@ -434,7 +435,8 @@ struct KeyboardRootView: View {
                 outerInset: Double(outerInset),
                 horizontalGap: Double(horizontalGap),
                 punctuationWidth: Double(punctuationWidth),
-                includesInputModeSwitchKey: documentState.needsInputModeSwitchKey
+                includesInputModeSwitchKey: documentState.needsInputModeSwitchKey,
+                usesSystemProportions: !usesCompactMetrics
             )
             let modeWidth = CGFloat(widths.mode)
             let returnWidth = CGFloat(widths.returnKey)
@@ -449,7 +451,7 @@ struct KeyboardRootView: View {
                     bottomKey(id: .globe, systemName: "globe", width: 45)
                 }
                 bottomKey(id: .mode, title: layout == .letters ? "123" : "ABC", width: modeWidth)
-                punctuationKey(width: punctuationWidth, popupWidth: punctuationPopupWidth)
+                punctuationKey(width: CGFloat(widths.punctuation), popupWidth: punctuationPopupWidth)
                 spaceKey
                 bottomKey(id: .returnKey, systemName: "return", width: returnWidth)
             }

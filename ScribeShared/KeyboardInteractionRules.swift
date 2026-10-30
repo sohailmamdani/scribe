@@ -179,22 +179,30 @@ struct KeyboardGeometryRules: Equatable {
     let outerInset: Double
     let toolbarHeight: Double
     let toolbarToKeyGap: Double
-    /// Target width for Shift and Delete on a roomy screen. The width actually
-    /// used is `controlWidth(totalWidth:)`, which shrinks this when the screen
-    /// cannot afford it.
+    /// Landscape keeps its established control width; portrait controls use
+    /// a proportion of the measured column pitch.
     let preferredControlWidth: Double
+    let controlWidthInColumns: Double?
     let hostHeightAdjustment: Double
 
-    static let portrait = KeyboardGeometryRules(
-        keyHeight: 45,
-        horizontalGap: 6,
-        verticalGap: 11,
-        outerInset: 7,
-        toolbarHeight: 39,
-        toolbarToKeyGap: 6,
-        preferredControlWidth: 50,
-        hostHeightAdjustment: 5
-    )
+    static let portrait = portrait(totalWidth: 440)
+
+    /// English QWERTY caps measured on iOS 26.2 at 375, 402 and 440 pt.
+    /// The smaller phones keep a 54 pt row pitch; Max uses 56 pt. Horizontal
+    /// positions use the same ten-column grid at every width.
+    static func portrait(totalWidth: Double) -> KeyboardGeometryRules {
+        KeyboardGeometryRules(
+            keyHeight: totalWidth <= 375 ? 42 : (totalWidth < 430 ? 43 : 45),
+            horizontalGap: 6,
+            verticalGap: totalWidth <= 375 ? 12 : 11,
+            outerInset: 6.5,
+            toolbarHeight: 39,
+            toolbarToKeyGap: 6,
+            preferredControlWidth: 50,
+            controlWidthInColumns: 1.3,
+            hostHeightAdjustment: 5
+        )
+    }
 
     static let compact = KeyboardGeometryRules(
         keyHeight: 27,
@@ -204,6 +212,7 @@ struct KeyboardGeometryRules: Equatable {
         toolbarHeight: 32,
         toolbarToKeyGap: 5,
         preferredControlWidth: 87,
+        controlWidthInColumns: nil,
         hostHeightAdjustment: 3
     )
 
@@ -221,13 +230,6 @@ struct KeyboardGeometryRules: Equatable {
         (tenColumnKeyWidth(totalWidth: totalWidth) + horizontalGap) / 2
     }
 
-    /// Shift and Delete shrink rather than overflow.
-    ///
-    /// These used to be a hard 50 pt (87 pt compact) at every screen width. On
-    /// a 320 pt iPhone the bottom letter row then needed 324 pt of a 306 pt
-    /// space and overflowed by 18 pt, squeezing the row it was supposed to
-    /// frame. Roomy screens are unaffected: the preferred width still wins
-    /// wherever it fits.
     /// Floor for a shrunken control key. The hit grid extends Shift and Delete
     /// to the screen edge, so the touch target stays comfortably larger than
     /// the cap. This only stops the cap collapsing at absurd widths.
@@ -238,9 +240,12 @@ struct KeyboardGeometryRules: Equatable {
         let letters = 7 * tenColumnKeyWidth(totalWidth: totalWidth) + 6 * horizontalGap
         // Reserve at least one standard gap on each side of the letter block.
         let affordable = (available - letters - 2 * horizontalGap) / 2
+        let preferred = controlWidthInColumns.map {
+            $0 * (tenColumnKeyWidth(totalWidth: totalWidth) + horizontalGap) - horizontalGap
+        } ?? preferredControlWidth
         return max(
             Self.minimumControlWidth,
-            min(preferredControlWidth, affordable)
+            min(preferred, affordable)
         )
     }
 
@@ -277,6 +282,7 @@ struct KeyboardBottomRowWidths: Equatable {
     let mode: Double
     let returnKey: Double
     let space: Double
+    let punctuation: Double
 
     static let preferredModeWidth = 58.0
     static let preferredReturnWidth = 64.0
@@ -288,9 +294,23 @@ struct KeyboardBottomRowWidths: Equatable {
         outerInset: Double,
         horizontalGap: Double,
         punctuationWidth: Double,
-        includesInputModeSwitchKey: Bool
+        includesInputModeSwitchKey: Bool,
+        usesSystemProportions: Bool = false
     ) -> KeyboardBottomRowWidths {
         let availableWidth = totalWidth - 2 * outerInset
+        if usesSystemProportions && !includesInputModeSwitchKey {
+            // Apple places Space between columns 2.5 and 7.5. Split its left
+            // control into 123 and Period, preserving that exact Space region.
+            let columnPitch = (availableWidth + horizontalGap) / 10
+            let sideWidth = 2.5 * columnPitch - horizontalGap
+            let punctuation = min(punctuationWidth, (sideWidth - horizontalGap) / 2)
+            return KeyboardBottomRowWidths(
+                mode: sideWidth - horizontalGap - punctuation,
+                returnKey: sideWidth,
+                space: 5 * columnPitch - horizontalGap,
+                punctuation: punctuation
+            )
+        }
         let mode = min(
             preferredModeWidth,
             max(minimumModeWidth, availableWidth * 0.16)
@@ -304,7 +324,8 @@ struct KeyboardBottomRowWidths: Equatable {
         return KeyboardBottomRowWidths(
             mode: mode,
             returnKey: returnKey,
-            space: space
+            space: space,
+            punctuation: punctuationWidth
         )
     }
 }

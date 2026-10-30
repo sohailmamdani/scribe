@@ -54,7 +54,7 @@ final class KeyboardInteractionRulesTests: XCTestCase {
 
         XCTAssertEqual(widths.mode, 58)
         XCTAssertEqual(widths.returnKey, 64)
-        XCTAssertEqual(widths.space, 190)
+        XCTAssertEqual(widths.space, 191)
         XCTAssertLessThan(widths.mode, widths.returnKey)
     }
 
@@ -216,9 +216,9 @@ final class KeyboardInteractionRulesTests: XCTestCase {
 
     func testPortraitGeometryMatchesCapturedSystemGrid() {
         let geometry = KeyboardGeometryRules.portrait
-        XCTAssertEqual(geometry.tenColumnKeyWidth(totalWidth: 440), 37.2, accuracy: 0.001)
-        XCTAssertEqual(geometry.homeRowInset(totalWidth: 440), 21.6, accuracy: 0.001)
-        XCTAssertEqual(geometry.controlToLetterGap(totalWidth: 440), 14.8, accuracy: 0.001)
+        XCTAssertEqual(geometry.tenColumnKeyWidth(totalWidth: 440), 37.3, accuracy: 0.001)
+        XCTAssertEqual(geometry.homeRowInset(totalWidth: 440), 21.65, accuracy: 0.001)
+        XCTAssertEqual(geometry.controlToLetterGap(totalWidth: 440), 14.66, accuracy: 0.001)
         XCTAssertEqual(geometry.toolbarToKeyGap, 6)
         XCTAssertEqual(geometry.contentHeight, 258)
         XCTAssertEqual(geometry.extensionHeight, 263)
@@ -245,12 +245,12 @@ final class KeyboardInteractionRulesTests: XCTestCase {
 		let portrait = KeyboardGeometryRules.portrait
 		XCTAssertEqual(
 			portrait.fittedControlRowKeyWidth(totalWidth: 440, characterCount: 9),
-			29.555,
+			29.602,
 			accuracy: 0.001
 		)
 		XCTAssertEqual(
 			portrait.fittedControlRowKeyWidth(totalWidth: 440, characterCount: 6),
-			47.333,
+			47.403,
 			accuracy: 0.001
 		)
 
@@ -286,11 +286,10 @@ final class KeyboardInteractionRulesTests: XCTestCase {
         }
     }
 
-    /// Roomy screens keep the design-reviewed proportions exactly.
-    func testWideScreensKeepThePreferredControlWidth() {
+    func testWideScreensUseMeasuredPortraitAndExistingCompactControls() {
         XCTAssertEqual(
             KeyboardGeometryRules.portrait.controlWidth(totalWidth: 440),
-            KeyboardGeometryRules.portrait.preferredControlWidth
+            50.29, accuracy: 0.001
         )
         XCTAssertEqual(
             KeyboardGeometryRules.compact.controlWidth(totalWidth: 956),
